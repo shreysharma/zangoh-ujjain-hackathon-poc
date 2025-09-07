@@ -66,6 +66,15 @@ class ApiService {
   private lastEventTime = 0;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 3;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private lastActivityTime = Date.now();
+  private connectionCheckInterval: NodeJS.Timeout | null = null;
+  private lastResponseTime = Date.now();
+  private silenceTimeout: NodeJS.Timeout | null = null;
+  private sseMessageCallback: ((data: StreamResponse) => void) | null = null;
+  private sseRestartTimeout: NodeJS.Timeout | null = null;
+  private sseRotationInterval: NodeJS.Timeout | null = null;
+  private sseStartTime = Date.now();
 
   constructor() {
     this.baseUrl = config.api.baseUrl;
@@ -145,7 +154,13 @@ async connect(
     if (response.ok) {
       this.isConnected = true;
       this.isConnecting = false;
+      this.lastActivityTime = Date.now();
+      this.lastResponseTime = Date.now();
       console.log("🔌 Connected to API");
+      
+      // Start heartbeat to keep connection alive
+      this.startHeartbeat();
+      
       return true;
     } else {
       this.isConnecting = false;
@@ -171,6 +186,10 @@ async connect(
   // Disconnect from API
 async disconnect(): Promise<void> {
   try {
+    // Stop heartbeat and monitors
+    this.stopHeartbeat();
+    this.stopSilenceMonitor();
+    
     const response = await fetch(`${this.baseUrl}/disconnect`, {
       method: "POST",
       headers: this.getHeaders(),
@@ -196,6 +215,18 @@ async disconnect(): Promise<void> {
   async sendText(text: string): Promise<void> {
     if (!this.isConnected) {
       throw new Error("Not connected to API");
+    }
+    
+    // Always check SSE stream health before sending
+    const timeSinceLastResponse = Date.now() - this.lastResponseTime;
+    const sseAge = Date.now() - this.sseStartTime;
+    
+    // If stream is old (>4 min) or no recent responses (>3 min), restart it
+    if ((sseAge > 240000 || timeSinceLastResponse > 180000) && this.isStreamActive) {
+      console.log(`⚠️ Refreshing SSE stream (age: ${Math.floor(sseAge/1000)}s, last response: ${Math.floor(timeSinceLastResponse/1000)}s ago)`);
+      this.restartSSEStream();
+      // Short wait for stream to restart
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
 
     try {
@@ -231,7 +262,17 @@ async disconnect(): Promise<void> {
         return;
       }
 
-      console.log("Text message sent, waiting for SSE response...");
+      console.log(`📨 Text sent: "${text.substring(0, 50)}..."`);
+      this.lastActivityTime = Date.now();
+      
+      // Monitor if we get a response within 15 seconds
+      setTimeout(() => {
+        const currentTime = Date.now();
+        if (this.lastResponseTime < this.lastActivityTime && this.isConnected) {
+          console.log("⚠️ No SSE response received after sending text, restarting stream...");
+          this.restartSSEStream();
+        }
+      }, 15000);
     } catch (error) {
       // Handle specific Live API WebSocket closure error
       if (error instanceof Error && error.message.includes('Failed to send message to Live API') && error.message.includes('1000 (OK)')) {
@@ -243,7 +284,7 @@ async disconnect(): Promise<void> {
           } catch (reconnectError) {
             console.error("Reconnection failed:", reconnectError);
           }
-        }, 2000);
+        }, 10);
         throw new Error("API_NOT_CONNECTED");
       }
       
@@ -256,7 +297,7 @@ async disconnect(): Promise<void> {
       }
     }
   }
-is
+
   // Send audio chunk
   async sendAudio(pcmData: Int16Array): Promise<void> {
     if (!this.isConnected) return;
@@ -272,8 +313,31 @@ is
         body: JSON.stringify({ audio_data: base64Audio } as SendAudioRequest),
       });
 
+      // Update activity time on successful send
+      if (response.ok) {
+        this.lastActivityTime = Date.now();
+      }
 
       if (!response.ok) {
+        // Handle 400 errors - session expired, need to reconnect
+        if (response.status === 400) {
+          console.log("⚠️ Session expired (400 error) - marking disconnected for reconnection");
+          this.isConnected = false;
+          
+          // Trigger reconnection after a brief delay
+          setTimeout(async () => {
+            console.log("🔄 Attempting to reconnect after 400 error...");
+            try {
+              await this.connect("AUDIO");
+              console.log("✅ Reconnected successfully after 400 error");
+            } catch (reconnectError) {
+              console.error("❌ Reconnection failed after 400 error:", reconnectError);
+              notificationService.showError("Connection lost. Please refresh the page.", 5000);
+            }
+          }, 1000);
+          return;
+        }
+        
         // Silently handle 500 errors for send_audio API - no notifications
         if (response.status === 500) {
           return; // Exit silently for 500 errors
@@ -378,14 +442,37 @@ is
 
   // Start Server-Sent Events stream
   startEventStream(onMessage: (data: StreamResponse) => void): void {
-    // Don't start a new stream if one already exists
-    if (this.isStreamActive) {
-      console.log("📡 Event stream already active");
+    // Store the callback for later use
+    this.sseMessageCallback = onMessage;
+    
+    // ALWAYS force close any existing stream to prevent duplicates
+    if (this.streamController || this.isStreamActive) {
+      console.log("📡 Force closing any existing streams...");
+      
+      // Kill the old controller immediately
+      if (this.streamController) {
+        try {
+          this.streamController.abort();
+        } catch (e) {
+          // Ignore errors
+        }
+        this.streamController = null;
+      }
+      
+      // Mark inactive
+      this.isStreamActive = false;
+      
+      // Small delay then restart
+      setTimeout(() => this.startEventStream(onMessage), 100);
       return;
     }
 
     this.isStreamActive = true;
     this.reconnectAttempts = 0;
+    this.sseStartTime = Date.now();
+    
+    // Start SSE rotation timer - force new connection every 4 minutes
+    this.startSSERotation();
 
     // Create new abort controller for this stream
     this.streamController = new AbortController();
@@ -403,7 +490,7 @@ is
       headers: headers,
       method: "GET",
       signal: this.streamController.signal,
-      onopen(res) {
+      onopen: async (res) => {
         if (
           res.ok &&
           res.headers.get("content-type")?.includes("text/event-stream")
@@ -413,13 +500,27 @@ is
           throw new Error(`❌ Unexpected response: ${res.status}`);
         }
       },
-      onmessage(msg) {
+      onmessage: (msg) => {
         try {
           const data = JSON.parse(msg.data) as StreamResponse;
-          // console.log("📡 SSE Event received:", data.type, data);
+          // Update last response time when we receive any message
+          this.lastResponseTime = Date.now();
+          this.lastActivityTime = Date.now();
+          
+          // Simple, clear logging
+          if (data.type === 'text') {
+            console.log(`📡 Text event: ${data.text ? 'Has content' : 'EMPTY'}`);
+          } else if (data.type === 'audio') {
+            console.log(`🔊 Audio event: ${data.audio_data ? 'Has audio' : 'EMPTY'}`);
+          } else if (data.type === 'turn_complete') {
+            console.log(`✅ Turn complete`);
+          } else if (data.type === 'interrupted') {
+            console.log(`🛑 Interrupted`);
+          }
+          
           onMessage(data);
         } catch (err) {
-          console.error("❌ Failed to parse SSE message:", err);
+          console.error("❌ Failed to parse SSE message:", err, "Raw message:", msg);
         }
       },
       onclose: () => {
@@ -428,10 +529,21 @@ is
       },
       onerror: (err) => {
         console.error("SSE error:", err);
-        notificationService.showError("Connection lost. Reconnecting...", 2000);
-        setTimeout(() => {
-          this.startEventStream(onMessage);
-        }, 3000);
+        this.isStreamActive = false;
+        
+        // Retry SSE connection after a short delay
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.reconnectAttempts++;
+          console.log(`🔄 Retrying SSE connection (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+          setTimeout(() => {
+            if (this.isConnected) {
+              this.startEventStream(onMessage);
+            }
+          }, 2000);
+        } else {
+          notificationService.showError("Stream connection lost. Refreshing connection...", 3000);
+          this.restartSSEStream();
+        }
       },
     });
   }
@@ -439,6 +551,9 @@ is
   // Close event stream
   closeEventStream(): void {
     console.log('🔌 Closing event stream...')
+    
+    // Stop SSE rotation
+    this.stopSSERotation();
     
     // Abort the fetch request
     if (this.streamController) {
@@ -455,6 +570,177 @@ is
     this.isStreamActive = false;
     this.reconnectAttempts = 0;
     console.log('✅ Event stream closed')
+  }
+
+  // Start heartbeat to keep connection alive
+  private startHeartbeat(): void {
+    // Clear any existing heartbeat
+    this.stopHeartbeat();
+    
+    // Use a proper keepalive endpoint instead of sending empty text
+    this.heartbeatInterval = setInterval(async () => {
+      if (this.isConnected) {
+        try {
+          // Use health check as keepalive
+          const response = await fetch(`${this.baseUrl}/health`, {
+            method: "GET",
+            headers: this.getHeaders(),
+            signal: AbortSignal.timeout(5000),
+          });
+          
+          if (!response.ok) {
+            console.log("⚠️ Health check failed, reconnecting...");
+            await this.handleConnectionLoss();
+          } else {
+            this.lastActivityTime = Date.now();
+          }
+        } catch (error) {
+          console.error("❌ Heartbeat failed:", error);
+          await this.handleConnectionLoss();
+        }
+      }
+    }, 30000); // Check every 30 seconds
+    
+    // Monitor for silence (no responses for 4 minutes)
+    this.startSilenceMonitor();
+  }
+  
+  // Stop heartbeat
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    this.stopSilenceMonitor();
+  }
+  
+  // Start monitoring for silence (no responses)
+  private startSilenceMonitor(): void {
+    this.stopSilenceMonitor();
+    
+    // Check every 20 seconds if we've received any responses
+    this.connectionCheckInterval = setInterval(() => {
+      const timeSinceLastResponse = Date.now() - this.lastResponseTime;
+      const sseAge = Date.now() - this.sseStartTime;
+      
+      console.log(`🔍 SSE Monitor - Last response: ${Math.floor(timeSinceLastResponse/1000)}s ago, Stream age: ${Math.floor(sseAge/1000)}s, Active: ${this.isStreamActive}`);
+      console.log(`🔍 Connection states - Backend: ${this.isConnected}, SSE: ${this.isStreamActive}, Callback exists: ${!!this.sseMessageCallback}`);
+      
+      // If no response for 2 minutes, force restart SSE
+      if (timeSinceLastResponse > 120000 && this.isConnected) {
+        console.log("⚠️ No SSE responses for 2 minutes, forcing stream restart...");
+        this.restartSSEStream();
+      }
+    }, 20000); // Check every 20 seconds
+  }
+  
+  // Stop silence monitor
+  private stopSilenceMonitor(): void {
+    if (this.connectionCheckInterval) {
+      clearInterval(this.connectionCheckInterval);
+      this.connectionCheckInterval = null;
+    }
+    if (this.silenceTimeout) {
+      clearTimeout(this.silenceTimeout);
+      this.silenceTimeout = null;
+    }
+  }
+  
+  // Handle connection loss and reconnect
+  private async handleConnectionLoss(): Promise<void> {
+    console.log("🔄 Handling connection loss...");
+    this.isConnected = false;
+    this.stopHeartbeat();
+    
+    // Clear any pending responses
+    this.clearPendingResponses();
+    
+    // Try to reconnect
+    setTimeout(async () => {
+      try {
+        console.log("🔄 Attempting reconnection...");
+        await this.connect("AUDIO");
+        console.log("✅ Reconnected successfully");
+      } catch (error) {
+        console.error("❌ Reconnection failed:", error);
+        notificationService.showError("Connection lost. Please refresh the page.", 5000);
+      }
+    }, 2000);
+  }
+  
+  // Clear any pending responses to avoid stale data
+  private clearPendingResponses(): void {
+    // Close the current stream
+    this.closeEventStream();
+    
+    // Reset state
+    this.lastResponseTime = Date.now();
+    this.lastActivityTime = Date.now();
+  }
+  
+  // Restart SSE stream without disconnecting backend
+  private restartSSEStream(): void {
+    if (this.sseRestartTimeout) {
+      clearTimeout(this.sseRestartTimeout);
+    }
+    
+    console.log("🔄 Force killing old SSE and starting fresh...");
+    
+    // FORCE KILL everything related to the old stream
+    if (this.streamController) {
+      try {
+        this.streamController.abort();
+      } catch (e) {
+        console.log("⚠️ Error aborting controller:", e);
+      }
+      this.streamController = null;
+    }
+    
+    // Close any existing event source
+    if (this.eventSource) {
+      try {
+        this.eventSource.close();
+      } catch (e) {
+        console.log("⚠️ Error closing event source:", e);
+      }
+      this.eventSource = null;
+    }
+    
+    // Mark as completely inactive
+    this.isStreamActive = false;
+    this.reconnectAttempts = 0;
+    
+    // Immediately restart with new stream
+    if (this.isConnected && this.sseMessageCallback) {
+      console.log("📡 Starting completely fresh SSE stream...");
+      // Small delay to ensure cleanup
+      setTimeout(() => {
+        this.startEventStream(this.sseMessageCallback);
+      }, 100);
+    }
+  }
+  
+  // Start SSE rotation timer
+  private startSSERotation(): void {
+    this.stopSSERotation();
+    
+    // Rotate SSE connection every 3 minutes to prevent timeout
+    this.sseRotationInterval = setInterval(() => {
+      const sseAge = Date.now() - this.sseStartTime;
+      console.log(`⏰ SSE stream age: ${Math.floor(sseAge/1000)}s, rotating to prevent timeout...`);
+      
+      if (this.isConnected && this.isStreamActive) {
+        this.restartSSEStream();
+      }
+    }, 180000); // 3 minutes
+  }
+  
+  // Stop SSE rotation
+  private stopSSERotation(): void {
+    if (this.sseRotationInterval) {
+      clearInterval(this.sseRotationInterval);
+      this.sseRotationInterval = null;
+    }
   }
 
   // Get system instructions based on modality

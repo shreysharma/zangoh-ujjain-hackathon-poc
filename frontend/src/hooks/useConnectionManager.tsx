@@ -117,20 +117,30 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
 
       case 'input_transcription':
         if (data.text && data.text.trim()) {
-          addHumanMessage(data.text.trim())
-          if (currentTurnActiveRef.current) {
-            setCurrentTurnActive(false)
+          // Clean noise tags and other unwanted patterns from transcription
+          const cleanedText = data.text
+            .replace(/<noise>/gi, '')
+            .replace(/&lt;noise&gt;/gi, '')
+            .replace(/\[noise\]/gi, '')
+            .replace(/\(noise\)/gi, '')
+            .trim()
+          
+          if (cleanedText) {
+            addHumanMessage(cleanedText)
+            if (currentTurnActiveRef.current) {
+              setCurrentTurnActive(false)
+            }
+            
+            // Clear any lingering text from previous turn when new input starts
+            setCurrentTranscriptText('')
+            setDisplayTranscript('')
+            setCurrentTextBuffer('')
+            setCurrentTranscriptionBuffer('')
+            
+            // Don't clear processed chunks - we removed duplicate detection
+            // audioService.clearProcessedChunks()
+            console.log('🎤 New input transcription received, cleared previous text')
           }
-          
-          // Clear any lingering text from previous turn when new input starts
-          setCurrentTranscriptText('')
-          setDisplayTranscript('')
-          setCurrentTextBuffer('')
-          setCurrentTranscriptionBuffer('')
-          
-          // Don't clear processed chunks - we removed duplicate detection
-          // audioService.clearProcessedChunks()
-          console.log('🎤 New input transcription received, cleared previous text')
         }
         break
 

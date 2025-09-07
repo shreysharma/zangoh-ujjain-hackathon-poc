@@ -10,6 +10,10 @@ const HomePage = () => {
 
   // Disable body scroll immediately and prevent any scrolling
   useEffect(() => {
+    // Clear conversation data from localStorage first
+    localStorage.removeItem('divyadarshak-conversation')
+    console.log('🗑️ Cleared conversation data from localStorage')
+    
     // Reset entire app state when HomePage loads (on refresh or navigation)
     resetApp()
     setCurrentPage('home')

@@ -283,24 +283,8 @@ const SarathiPage = ({ onBack }: SarathiPageProps) => {
       if (audioAutoEnabled === 'true' && microphoneAutoEnabled === 'true' && lastActivation) {
         setShowReconnectPopup(true)
       } else {
-        // Auto-connect for new users
-        setTimeout(async () => {
-          if (!isConnected && !isConnecting) {
-            try {
-              const audioActivated = await audioService.activateAudioContext()
-              if (audioActivated) {
-                setIsAudioEnabled(true)
-                audioService.setAudioEnabled(true)
-                localStorage.setItem('audioAutoEnabled', 'true')
-                localStorage.setItem('microphoneAutoEnabled', 'true') 
-                localStorage.setItem('lastAudioActivation', Date.now().toString())
-              }
-            } catch (error) {
-              console.error('Failed to activate audio for new user:', error)
-            }
-            handleConnect()
-          }
-        }, 500)
+        // For new users, show the popup to request permission
+        setShowReconnectPopup(true)
       }
     }
 

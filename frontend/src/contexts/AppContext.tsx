@@ -57,6 +57,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       // Clear all message storage
       MessageStorage.clearAllMessages()
       
+      // Also clear conversation from localStorage
+      localStorage.removeItem('divyadarshak-conversation')
+      console.log('🗑️ Cleared conversation from localStorage')
+      
       // Reset app state
       setAppState({
         isInitialized: false,
