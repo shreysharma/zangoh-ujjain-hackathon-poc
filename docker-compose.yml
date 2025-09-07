@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  pilgrim-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
+      - NEXT_PUBLIC_API_KEY=${NEXT_PUBLIC_API_KEY}
+    env_file:
+      - .env
+    container_name: pilgrim-ujjain-app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
