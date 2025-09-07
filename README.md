@@ -154,5 +154,3 @@ docker-compose up -d --build
 ```
 
 ---
-
-**Happy Pilgrimage! Har Har Mahadev!**
