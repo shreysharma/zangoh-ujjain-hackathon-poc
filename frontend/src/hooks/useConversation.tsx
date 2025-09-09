@@ -1,4 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { cleanText } from '../utils/translationUtils'
+import { SessionManager } from '../utils/sessionManager'
+
+// Function to remove HTML/XML tags from text
+const stripTags = (text: string): string => {
+  if (!text) return text
+  // Remove all HTML/XML tags like <noise>, <tag>, etc.
+  return text.replace(/<[^>]*>/g, '').trim()
+}
 
 export interface ProductLink {
   url: string
@@ -43,20 +52,17 @@ export interface Message {
   file?: {
     name: string
     type: string
-    url: string
+    url?: string  // Optional - for preview only, not stored in localStorage
+    previewUrl?: string  // Temporary preview URL (in-memory only)
   }
   productLinks?: ProductLink[]
   isAudio?: boolean
   isStreaming?: boolean
   originalText?: string  // Store original non-English text
   language?: string      // Detected language code
-  // Legacy support for old interface
-  text?: string
-  isUser?: boolean
-  audioChunks?: string[]
 }
 
-const CONVERSATION_STORAGE_KEY = 'divyadarshak-conversation'
+const CONVERSATION_STORAGE_KEY = 'indiamart-conversation'
 
 export const useConversation = () => {
   const [messages, setMessages] = useState<Message[]>([])
@@ -77,12 +83,10 @@ export const useConversation = () => {
         const filteredMessages = messagesWithDates.filter(msg => msg.type !== 'product_links')
         
         setMessages(filteredMessages)
-        console.log(`Loaded ${messagesWithDates.length} messages from local storage, filtered to ${filteredMessages.length} messages (removed product_links)`)
         
         // Update localStorage to remove product_links messages
         if (filteredMessages.length !== messagesWithDates.length) {
           localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(filteredMessages))
-          console.log('Updated localStorage to remove product_links messages')
         }
       } catch (error) {
         console.error('Failed to parse saved messages:', error)
@@ -95,7 +99,6 @@ export const useConversation = () => {
   useEffect(() => {
     if (messages.length > 0) {
       localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(messages))
-      console.log(`Saved ${messages.length} messages to local storage`)
     }
   }, [messages])
 
@@ -118,11 +121,11 @@ export const useConversation = () => {
       isAudio,
       isStreaming,
       originalText: translationData?.originalText,
-      language: translationData?.language,
-      // Legacy support
-      text: content,
-      isUser: type === 'human'
+      language: translationData?.language
     }
+    
+    // Add to current session
+    SessionManager.addMessageToCurrentSession(newMessage)
     
     setMessages(prev => [...prev, newMessage])
     return newMessage.id
@@ -132,15 +135,15 @@ export const useConversation = () => {
     return addMessage(content, 'bot', undefined, undefined, isAudio, false)
   }
 
-  const addHumanMessage = (content: string, file?: { name: string; type: string; url: string }) => {
-    console.log('🔍 useConversation - addHumanMessage called:', { content, hasFile: !!file })
-    const messageId = addMessage(content, 'human', file)
-    console.log('🔍 useConversation - Message added with ID:', messageId)
-    console.log('🔍 useConversation - Current messages:', messages)
-    return messageId
+  const addHumanMessage = async (content: string, file?: { name: string; type: string; url: string }) => {
+    // Strip HTML/XML tags from user message before storing
+    const cleanedContent = stripTags(content)
+    return addMessage(cleanedContent, 'human', file)
   }
 
   const addStatusMessage = (content: string) => {
+    // Remove all previous status messages before adding the new one
+    setMessages(prev => prev.filter(msg => msg.type !== 'status'))
     return addMessage(content, 'status')
   }
 
@@ -149,6 +152,7 @@ export const useConversation = () => {
   }
 
   const addProductLinks = (links: ProductLink[], functionName?: string) => {
+    
     const content = functionName ? `Search results from ${functionName}` : 'Product search results'
     return addMessage(content, 'product_links', undefined, links)
   }
@@ -159,7 +163,8 @@ export const useConversation = () => {
       return ''
     }
 
-    const cleanedContent = content.replace(/^null/gi, '').trim()
+    // Use enhanced text cleaning
+    const cleanedContent = cleanText(content)
     if (!cleanedContent) {
       return ''
     }
@@ -168,52 +173,62 @@ export const useConversation = () => {
     
     setMessages(prev => {
       const lastMessage = prev[prev.length - 1]
+      const now = new Date()
       
-      // Check if last message is a streaming bot message of the same type
+      // Check if last message is a streaming bot message of the same type AND within reasonable time
       if (lastMessage && 
           lastMessage.type === 'bot' && 
           lastMessage.isStreaming !== false &&
-          lastMessage.isAudio === isAudio) {
+          lastMessage.isAudio === isAudio &&
+          (now.getTime() - lastMessage.timestamp.getTime()) < 30000) {
         
-        // Update existing message - ACCUMULATE content properly
-        let accumulatedContent = lastMessage.content
-        
-        // Check if new content is cumulative (includes all previous) or incremental
-        if (cleanedContent.startsWith(lastMessage.content)) {
-          // Backend sent cumulative text (includes all previous)
-          accumulatedContent = cleanedContent
-        } else if (!lastMessage.content.includes(cleanedContent)) {
-          // New incremental text to append - add space if needed
-          const needsSpace = lastMessage.content && !lastMessage.content.endsWith(' ') && !cleanedContent.startsWith(' ')
-          accumulatedContent = lastMessage.content + (needsSpace ? ' ' : '') + cleanedContent
-        } else {
-          // Duplicate or already included, keep existing
-          accumulatedContent = lastMessage.content
+        // Check if content is actually different to avoid unnecessary updates
+        if (lastMessage.content === cleanedContent) {
+          messageId = lastMessage.id
+          return prev // No change needed
         }
         
+        // Update existing message
         const updatedMessage = {
           ...lastMessage,
-          content: accumulatedContent,
-          text: accumulatedContent, // Legacy support
-          isStreaming: true
+          content: cleanedContent,
+          isStreaming: true,
+          timestamp: lastMessage.timestamp // Keep original timestamp
         }
+        
+        // Update in session manager too
+        SessionManager.updateMessageInCurrentSession(updatedMessage)
         
         const updatedMessages = [...prev]
         updatedMessages[updatedMessages.length - 1] = updatedMessage
         messageId = updatedMessage.id
         return updatedMessages
       } else {
+        // Check if we have a very recent duplicate (within 100ms) with same content
+        const veryRecentDuplicate = prev.find(msg => 
+          msg.type === 'bot' && 
+          msg.isAudio === isAudio &&
+          msg.content === cleanedContent &&
+          (now.getTime() - msg.timestamp.getTime()) < 100
+        )
+        
+        if (veryRecentDuplicate) {
+          messageId = veryRecentDuplicate.id
+          return prev // Don't add duplicate
+        }
+        
         // Add new message
         const newMessage: Message = {
           id: `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
           type: 'bot',
           content: cleanedContent,
-          text: cleanedContent, // Legacy support
-          timestamp: new Date(),
+          timestamp: now,
           isAudio,
-          isStreaming: true,
-          isUser: false // Legacy support
+          isStreaming: true
         }
+        
+        // Add to session manager
+        SessionManager.addMessageToCurrentSession(newMessage)
         
         messageId = newMessage.id
         return [...prev, newMessage]
@@ -227,43 +242,62 @@ export const useConversation = () => {
   const finalizeStreamingMessage = (content?: string, isAudio = false) => {
     if (content && content.trim() && content !== 'null') {
       setMessages(prev => {
-        const lastMessage = prev[prev.length - 1]
-        
-        if (lastMessage && 
-            lastMessage.type === 'bot' && 
-            lastMessage.isStreaming &&
-            lastMessage.isAudio === isAudio) {
-          
-          const finalContent = content.replace(/^null/gi, '').trim()
-          const finalizedMessage = {
-            ...lastMessage,
-            content: finalContent,
-            text: finalContent, // Legacy support
-            isStreaming: false
+        // Find the most recent streaming bot message of the same type
+        for (let i = prev.length - 1; i >= 0; i--) {
+          const message = prev[i]
+          if (message.type === 'bot' && 
+              message.isStreaming &&
+              message.isAudio === isAudio) {
+            
+            const finalizedMessage = {
+              ...message,
+              content: cleanText(content),
+              isStreaming: false
+            }
+            
+            // Update in session manager too
+            SessionManager.updateMessageInCurrentSession(finalizedMessage)
+            
+            const updatedMessages = [...prev]
+            updatedMessages[i] = finalizedMessage
+            return updatedMessages
           }
-          
-          const updatedMessages = [...prev]
-          updatedMessages[updatedMessages.length - 1] = finalizedMessage
-          return updatedMessages
         }
-        return prev
+        
+        // If no streaming message found, create a new one
+        const newMessage: Message = {
+          id: `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+          type: 'bot',
+          content: cleanText(content),
+          timestamp: new Date(),
+          isAudio,
+          isStreaming: false
+        }
+        
+        SessionManager.addMessageToCurrentSession(newMessage)
+        return [...prev, newMessage]
       })
     }
   }
 
-  const clearConversation = () => {
+  const clearConversation = useCallback(() => {
     setMessages([])
     localStorage.removeItem(CONVERSATION_STORAGE_KEY)
-    console.log('Conversation cleared from memory and local storage')
-  }
+  }, [])
 
-  const clearProductMessages = () => {
+  const forceResetConversation = useCallback(() => {
+    setMessages([])
+    localStorage.removeItem(CONVERSATION_STORAGE_KEY)
+    localStorage.removeItem('indiamart-session-current')
+    localStorage.removeItem('indiamart-sessions')
+  }, [])
+
+  const clearProductMessages = useCallback(() => {
     setMessages(prev => {
       const filteredMessages = prev.filter(msg => msg.type !== 'product_links')
-      console.log(`Cleared ${prev.length - filteredMessages.length} product messages from conversation`)
       return filteredMessages
     })
-  }
+  }, [])
 
   return {
     messages,
@@ -275,6 +309,7 @@ export const useConversation = () => {
     updateOrAddBotMessage,
     finalizeStreamingMessage,
     clearConversation,
-    clearProductMessages
+    clearProductMessages,
+    forceResetConversation
   }
 }

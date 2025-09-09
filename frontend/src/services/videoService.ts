@@ -22,7 +22,6 @@ class VideoService {
   // Start camera with specified constraints
   async startCamera(facingMode: 'user' | 'environment' = 'user'): Promise<MediaStream> {
     try {
-      console.log('Starting camera with facing mode:', facingMode)
       
       // Check if mediaDevices is supported
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -36,7 +35,6 @@ class VideoService {
 
       // Detect if on mobile device
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
-      console.log('Is mobile device:', isMobile)
       
       const constraints: VideoConstraints = {
         video: isMobile ? {
@@ -56,8 +54,6 @@ class VideoService {
       const stream = await navigator.mediaDevices.getUserMedia(constraints)
       this.currentStream = stream
       
-      console.log('Camera stream obtained:', stream)
-      console.log('Video tracks:', stream.getVideoTracks())
       
       return stream
     } catch (error) {
@@ -69,7 +65,6 @@ class VideoService {
   // Start screen sharing
   async startScreenShare(): Promise<MediaStream> {
     try {
-      console.log('Starting screen share')
       
       if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
         throw new Error('Screen sharing not supported by this browser')
@@ -81,7 +76,6 @@ class VideoService {
       })
       
       this.currentStream = stream
-      console.log('Screen share stream obtained:', stream)
       
       return stream
     } catch (error) {
@@ -92,11 +86,9 @@ class VideoService {
 
   // Stop current video stream
   stopVideoStream(): void {
-    console.log('Stopping video stream')
     
     if (this.currentStream) {
       this.currentStream.getTracks().forEach(track => {
-        console.log('Stopping track:', track.kind)
         track.stop()
       })
       this.currentStream = null
@@ -119,78 +111,16 @@ class VideoService {
   }
 
   // Start frame capture for AI analysis
-  startFrameCapture(intervalMs: number = 1000, callback?: (base64: string) => void): void {
+  startFrameCapture(intervalMs: number = 1000): void {
     if (this.isCapturing) {
       this.stopFrameCapture()
     }
     
     this.isCapturing = true
-    console.log('Starting frame capture with interval:', intervalMs, 'ms')
     
     this.captureInterval = setInterval(() => {
-      if (callback) {
-        this.captureFrameForCallback(callback)
-      } else {
-        this.captureAndSendFrame()
-      }
+      this.captureAndSendFrame()
     }, intervalMs)
-  }
-  
-  // Capture frame and pass to callback
-  private captureFrameForCallback(callback: (base64: string) => void): void {
-    if (!this.videoElement || !this.videoElement.videoWidth) {
-      return
-    }
-
-    try {
-      // Create canvas if not exists
-      if (!this.canvasElement) {
-        this.canvasElement = document.createElement('canvas')
-      }
-
-      const canvas = this.canvasElement
-      const ctx = canvas.getContext('2d')
-      
-      if (!ctx) {
-        console.error('Cannot get canvas context')
-        return
-      }
-
-      // Set canvas dimensions to match video
-      canvas.width = this.videoElement.videoWidth
-      canvas.height = this.videoElement.videoHeight
-      
-      // Draw current video frame
-      ctx.drawImage(this.videoElement, 0, 0, canvas.width, canvas.height)
-      
-      // Resize canvas to smaller dimensions for faster transmission
-      const resizedCanvas = document.createElement('canvas')
-      const resizedCtx = resizedCanvas.getContext('2d')
-      
-      // Reduce dimensions by 50% for faster processing
-      resizedCanvas.width = Math.floor(canvas.width * 0.5)
-      resizedCanvas.height = Math.floor(canvas.height * 0.5)
-      
-      if (resizedCtx) {
-        resizedCtx.drawImage(canvas, 0, 0, resizedCanvas.width, resizedCanvas.height)
-      }
-      
-      // Convert to base64 JPEG with lower quality for faster transmission
-      resizedCanvas.toBlob((blob) => {
-        if (blob) {
-          const reader = new FileReader()
-          reader.onload = () => {
-            const base64 = (reader.result as string).split(',')[1]
-            console.log('📸 Captured video frame, size:', Math.round(base64.length / 1024), 'KB')
-            callback(base64)
-          }
-          reader.readAsDataURL(blob)
-        }
-      }, 'image/jpeg', 0.5) // Reduced quality from 0.8 to 0.5
-      
-    } catch (error) {
-      console.error('Error capturing video frame:', error)
-    }
   }
 
   // Stop frame capture
@@ -200,7 +130,6 @@ class VideoService {
       this.captureInterval = null
     }
     this.isCapturing = false
-    console.log('Frame capture stopped')
   }
 
   // Capture current video frame and send to API
@@ -230,31 +159,18 @@ class VideoService {
       // Draw current video frame
       ctx.drawImage(this.videoElement, 0, 0, canvas.width, canvas.height)
       
-      // Resize for faster transmission
-      const resizedCanvas = document.createElement('canvas')
-      const resizedCtx = resizedCanvas.getContext('2d')
-      
-      // Reduce dimensions by 50%
-      resizedCanvas.width = Math.floor(canvas.width * 0.5)
-      resizedCanvas.height = Math.floor(canvas.height * 0.5)
-      
-      if (resizedCtx) {
-        resizedCtx.drawImage(canvas, 0, 0, resizedCanvas.width, resizedCanvas.height)
-      }
-      
-      // Convert to base64 JPEG with lower quality
-      resizedCanvas.toBlob((blob) => {
+      // Convert to base64 JPEG and send to API (like original)
+      canvas.toBlob((blob) => {
         if (blob) {
           const reader = new FileReader()
           reader.onload = () => {
             const base64 = (reader.result as string).split(',')[1]
-            console.log('Sending video frame to AI, size:', Math.round(base64.length / 1024), 'KB')
             // Send to API (like original - no await/async complexity)
             apiService.sendImage(base64)
           }
           reader.readAsDataURL(blob)
         }
-      }, 'image/jpeg', 0.5) // Reduced quality
+      }, 'image/jpeg', 0.8)
       
     } catch (error) {
       console.error('Error capturing video frame:', error)

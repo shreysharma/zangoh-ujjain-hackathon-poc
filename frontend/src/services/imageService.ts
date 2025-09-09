@@ -85,7 +85,6 @@ class ImageService {
         return await response.text()
       }
     } catch (error) {
-      console.log('Direct fetch failed, trying proxies...')
     }
 
     // Try CORS proxies
@@ -101,7 +100,6 @@ class ImageService {
           return await response.text()
         }
       } catch (error) {
-        console.log(`Proxy ${proxy} failed:`, error)
         continue
       }
     }

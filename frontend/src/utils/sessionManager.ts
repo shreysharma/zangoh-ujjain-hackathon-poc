@@ -1,6 +1,7 @@
 // Session management for conversations
 import { Message } from '../hooks/useConversation'
 import { apiService } from '../services/apiService'
+import { apiCounterService } from '../services/apiCounterService'
 
 export interface ConversationSession {
   sessionId: string
@@ -41,7 +42,9 @@ export class SessionManager {
     this.saveSession(newSession)
     this.currentSessionId = sessionId
     
-    console.log('📝 New conversation session created:', sessionId)
+    // Track session creation
+    apiCounterService.trackSessionCreated()
+    
     return sessionId
   }
 
@@ -63,7 +66,10 @@ export class SessionManager {
         session.endTime = new Date()
         session.status = 'ended'
         this.saveSession(session)
-        console.log('🔚 Session ended:', this.currentSessionId)
+        
+        // Track session ending
+        apiCounterService.trackSessionEnded()
+        
         
         // Auto-export session as JSON and upload to backend
         await this.autoExportSession(this.currentSessionId)
@@ -80,8 +86,15 @@ export class SessionManager {
 
     const session = this.getSession(this.currentSessionId)
     if (session) {
+      // Ensure message has an ID
+      if (!message.id) {
+        message.id = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+      }
       session.messages.push(message)
       this.saveSession(session)
+      
+      // Track message addition
+      apiCounterService.trackMessage()
     }
   }
 
@@ -100,6 +113,9 @@ export class SessionManager {
         this.saveSession(session)
       } else {
         // If message doesn't exist, add it
+        if (!message.id) {
+          message.id = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+        }
         session.messages.push(message)
         this.saveSession(session)
       }
@@ -143,7 +159,11 @@ export class SessionManager {
       return sessions.map((session: any) => ({
         ...session,
         startTime: new Date(session.startTime),
-        endTime: session.endTime ? new Date(session.endTime) : undefined
+        endTime: session.endTime ? new Date(session.endTime) : undefined,
+        messages: session.messages.map((msg: any) => ({
+          ...msg,
+          timestamp: typeof msg.timestamp === 'string' ? new Date(msg.timestamp) : msg.timestamp
+        }))
       }))
     } catch (error) {
       console.error('Error loading sessions:', error)
@@ -173,7 +193,6 @@ export class SessionManager {
   static clearAllSessions(): void {
     localStorage.removeItem(SESSION_STORAGE_KEY)
     this.currentSessionId = null
-    console.log('🗑️ All sessions cleared')
   }
 
   // Initialize automatic cleanup (call this when app starts)
@@ -191,7 +210,6 @@ export class SessionManager {
       this.cleanupOldSessions()
     }, 10 * 60 * 1000) // 10 minutes
 
-    console.log('🧹 Auto-cleanup initialized - will run every 10 minutes')
   }
 
   // Stop automatic cleanup
@@ -199,7 +217,6 @@ export class SessionManager {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval)
       this.cleanupInterval = null
-      console.log('🧹 Auto-cleanup stopped')
     }
   }
 
@@ -216,7 +233,6 @@ export class SessionManager {
         const isOld = sessionTime < oneHourAgo
         
         if (isOld) {
-          console.log(`🗑️ Removing old session: ${session.sessionId} (${sessionTime.toISOString()})`)
         }
         
         return !isOld
@@ -226,9 +242,7 @@ export class SessionManager {
       if (validSessions.length !== initialCount) {
         localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(validSessions))
         const removedCount = initialCount - validSessions.length
-        console.log(`🧹 Cleanup completed: Removed ${removedCount} old session(s), ${validSessions.length} remaining`)
       } else {
-        console.log('🧹 Cleanup completed: No old sessions found')
       }
     } catch (error) {
       console.error('❌ Error during session cleanup:', error)
@@ -311,7 +325,6 @@ export class SessionManager {
       document.body.removeChild(link)
       URL.revokeObjectURL(url)
 
-      console.log('📁 Session exported:', this.generateFilename(session))
     } catch (error) {
       console.error('Error exporting session:', error)
     }
@@ -322,7 +335,6 @@ export class SessionManager {
     try {
       const sessions = this.getAllSessions()
       if (sessions.length === 0) {
-        console.log('No sessions to export')
         return
       }
 
@@ -366,7 +378,6 @@ export class SessionManager {
       document.body.removeChild(link)
       URL.revokeObjectURL(url)
 
-      console.log('📁 All sessions exported:', filename)
     } catch (error) {
       console.error('Error exporting all sessions:', error)
     }
@@ -380,7 +391,6 @@ export class SessionManager {
 
       // Only auto-export if session has messages
       if (session.messages.length > 0) {
-        console.log('🔄 Auto-uploading session:', sessionId)
         
         // Upload to backend only (no file download)
         await this.uploadSessionToBackend(sessionId)
@@ -422,9 +432,7 @@ export class SessionManager {
 
       const filename = this.generateFilename(session)
       
-      console.log('📤 Uploading session to backend:', filename)
       await apiService.uploadJson(filename, exportData)
-      console.log('✅ Session uploaded to backend successfully:', filename)
       
     } catch (error) {
       console.error('❌ Error uploading session to backend:', error)
