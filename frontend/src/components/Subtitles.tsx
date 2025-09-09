@@ -25,7 +25,14 @@ const Subtitles: React.FC<SubtitlesProps> = ({
       const isOverflowing = element.scrollHeight > element.clientHeight
       
       if (isOverflowing) {
-        element.scrollTop = element.scrollHeight - element.clientHeight
+        // Scroll 10px every 23 seconds
+        const scrollStep = () => {
+          if (element.scrollTop < element.scrollHeight - element.clientHeight) {
+            element.scrollTop += 10
+            setTimeout(scrollStep, 23000) // 23 seconds
+          }
+        }
+        setTimeout(scrollStep, 5000) // Initial delay
       }
     }
   }, [userText, botText])
@@ -36,7 +43,7 @@ const Subtitles: React.FC<SubtitlesProps> = ({
     <div className={`${className}`}>
       <div 
         ref={scrollContainerRef}
-        className={`rounded-lg px-4 py-2 max-w-md mx-auto max-h-24 overflow-y-auto scroll-smooth scrollbar-hide ${
+        className={`rounded-lg px-4 py-2 max-w-md mx-auto max-h-40 overflow-y-auto scroll-smooth scrollbar-hide ${
           isVideoMode 
             ? 'bg-white bg-opacity-70' 
             : 'bg-opacity-80'
