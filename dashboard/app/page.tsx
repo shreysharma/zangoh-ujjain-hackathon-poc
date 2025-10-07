@@ -5,17 +5,31 @@ import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { sanitizeInput, validateInput } from "@/lib/utils";
 
 export default function Home() {
   const router = useRouter();
   const [input, setInput] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+
+    // Validate input
+    const validation = validateInput(input);
+    if (!validation.isValid) {
+      setError(validation.error || "Invalid input");
+      return;
+    }
+
+    // Clear any previous errors
+    setError(null);
+
+    // Sanitize input before storing
+    const sanitized = sanitizeInput(input);
 
     // Store the initial query in session storage
-    sessionStorage.setItem("initialQuery", input);
+    sessionStorage.setItem("initialQuery", sanitized);
 
     // Generate a unique chat ID
     const chatId = Date.now().toString();
@@ -40,7 +54,12 @@ export default function Home() {
           </div>
 
           {/* Search Bar */}
-          <form onSubmit={handleSubmit} className="w-full">
+          <form onSubmit={handleSubmit} className="w-full space-y-3">
+            {error && (
+              <div className="px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <p className="text-red-400 text-sm">{error}</p>
+              </div>
+            )}
             <div className="flex items-center gap-3 bg-[#3A3A3A] rounded-xl px-5 py-4 border border-white/10">
               <Plus className="w-5 h-5 text-white flex-shrink-0" />
               <input

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useState, useEffect } from "react";
+import { sanitizeInput, validateInput } from "@/lib/utils";
 
 interface Message {
   id: string;
@@ -13,43 +14,67 @@ interface Message {
   timestamp: Date;
 }
 
+interface PageParams {
+  id: string;
+  [key: string]: string;
+}
+
 export default function ChatPage() {
-  const params = useParams();
-  const chatId = params.id as string;
+  const params = useParams<PageParams>();
+  const chatId = params.id;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Load initial message from localStorage or URL state
   useEffect(() => {
-    const stored = localStorage.getItem(`chat-${chatId}`);
-    if (stored) {
-      setMessages(JSON.parse(stored));
-    } else {
-      // Get initial query from session storage
-      const initialQuery = sessionStorage.getItem("initialQuery");
-      if (initialQuery) {
-        const userMessage: Message = {
-          id: Date.now().toString(),
-          text: initialQuery,
-          sender: "user",
-          timestamp: new Date(),
-        };
-        setMessages([userMessage]);
-        sessionStorage.removeItem("initialQuery");
+    try {
+      const stored = localStorage.getItem(`chat-${chatId}`);
+      if (stored) {
+        const parsedMessages = JSON.parse(stored);
+        // Sanitize loaded messages
+        const sanitizedMessages = parsedMessages.map((msg: Message) => ({
+          ...msg,
+          text: sanitizeInput(msg.text),
+          timestamp: new Date(msg.timestamp),
+        }));
+        setMessages(sanitizedMessages);
+      } else {
+        // Get initial query from session storage
+        const initialQuery = sessionStorage.getItem("initialQuery");
+        if (initialQuery) {
+          const sanitized = sanitizeInput(initialQuery);
+          const userMessage: Message = {
+            id: Date.now().toString(),
+            text: sanitized,
+            sender: "user",
+            timestamp: new Date(),
+          };
+          setMessages([userMessage]);
+          sessionStorage.removeItem("initialQuery");
 
-        // Simulate AI response
-        setTimeout(() => {
-          handleAIResponse(initialQuery);
-        }, 1500);
+          // Simulate AI response
+          setTimeout(() => {
+            handleAIResponse(sanitized);
+          }, 1500);
+        }
       }
+    } catch (err) {
+      console.error("Error loading chat messages:", err);
+      setError("Failed to load chat history");
     }
   }, [chatId]);
 
   // Save messages to localStorage
   useEffect(() => {
     if (messages.length > 0) {
-      localStorage.setItem(`chat-${chatId}`, JSON.stringify(messages));
+      try {
+        localStorage.setItem(`chat-${chatId}`, JSON.stringify(messages));
+      } catch (err) {
+        console.error("Error saving chat messages:", err);
+        setError("Failed to save chat");
+      }
     }
   }, [messages, chatId]);
 
@@ -86,18 +111,30 @@ export default function ChatPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+
+    // Validate input
+    const validation = validateInput(input);
+    if (!validation.isValid) {
+      setError(validation.error || "Invalid input");
+      return;
+    }
+
+    // Clear any previous errors
+    setError(null);
+
+    // Sanitize input before storing
+    const sanitized = sanitizeInput(input);
 
     const userMessage: Message = {
       id: Date.now().toString(),
-      text: input,
+      text: sanitized,
       sender: "user",
       timestamp: new Date(),
     };
 
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
-    handleAIResponse(input);
+    handleAIResponse(sanitized);
   };
 
   return (
@@ -149,6 +186,11 @@ export default function ChatPage() {
         {/* Input Bar - Fixed at bottom */}
         <div className="px-6">
           <div className="max-w-[900px] mx-auto">
+            {error && (
+              <div className="mb-3 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <p className="text-red-400 text-sm">{error}</p>
+              </div>
+            )}
             <form onSubmit={handleSubmit}>
               <div className="flex items-center gap-4 bg-[#3A3A3A] rounded-xl px-6 py-4 border border-white/10">
                 <Plus className="w-5 h-5 text-white flex-shrink-0" />
