@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --primary-orange: #E9842F;
+    --bg-light: #FFFAF4;
+    --bg-dark: #262626;
+    --bg-section: rgba(255, 255, 255, 0.03);
+    --border-light: #E9E8E8;
+    --border-divider: #EAEAEA;
+    --text-dark: #393939;
+    --text-gray: #757575;
+    --gray-section: #444444;
+    --accent-purple: #8A38F5;
+  }
+
+  body {
+    @apply bg-background-light text-text-dark;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Hindi/Devanagari font support */
+  .font-hindi {
+    font-family: 'Kokila', serif;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .delay-100 {
+    animation-delay: 0.1s;
+  }
+
+  .delay-200 {
+    animation-delay: 0.2s;
+  }
+}
