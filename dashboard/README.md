@@ -32,11 +32,28 @@ Smart Pilgrimage Management Dashboard for Security Personnel
 # Install dependencies
 npm install
 
+# Configure environment variables
+cp .env.local.example .env.local
+# Edit .env.local and add your API key (see API Setup below)
+
 # Run development server
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### API Setup (Required)
+
+The dashboard requires a backend API key to function.
+
+1. **Get API Key**: Contact your backend administrator
+2. **Configure**: Add to `.env.local`:
+   ```bash
+   NEXT_PUBLIC_API_KEY=your_api_key_here
+   ```
+3. **Restart**: Restart the dev server
+
+📚 **See [API_SETUP.md](./API_SETUP.md) for detailed setup instructions**
 
 ### Build for Production
 
@@ -85,12 +102,24 @@ dashboard/
 
 ## Environment Variables
 
-Currently no environment variables are required for development. For production:
+Required environment variables in `.env.local`:
 
 ```env
-# Add your environment variables here
-NODE_ENV=production
+# Backend API Configuration
+NEXT_PUBLIC_API_BASE_URL=https://divyadarshak-dev-us-central1-backend-api-719591289817.us-central1.run.app
+
+# API Key (REQUIRED)
+NEXT_PUBLIC_API_KEY=your_api_key_here
+
+# Authentication
+NEXT_PUBLIC_AUTH_ENABLED=true
+
+# Polling intervals (optional)
+NEXT_PUBLIC_QUERY_POLL_INTERVAL=1000
+NEXT_PUBLIC_EMAIL_POLL_INTERVAL=2000
 ```
+
+See [API_SETUP.md](./API_SETUP.md) for detailed configuration instructions.
 
 ## Contributing
 
