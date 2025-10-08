@@ -1011,6 +1011,24 @@ export const adminChatApi = {
         }
       }
 
+      // Check for case_summary field at message level (from conversation history)
+      // Backend returns case_summary directly on the conversation item
+      if (msg.case_summary) {
+        messageType = "case_details";
+        metadata = { case: msg.case_summary };
+      }
+
+      // Check for other metadata fields at message level
+      if (msg.brief_data) {
+        messageType = "operations_brief";
+        metadata = { brief: msg.brief_data };
+      }
+
+      if (msg.email_dispatch) {
+        messageType = "email_dispatch";
+        metadata = { email_dispatch: msg.email_dispatch };
+      }
+
       return {
         role: msg.role === "human" ? "user" : msg.role === "ai" ? "assistant" : msg.role,
         content,

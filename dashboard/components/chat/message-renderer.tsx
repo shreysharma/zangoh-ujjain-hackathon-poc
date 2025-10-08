@@ -106,12 +106,40 @@ function transformEmailData(data: any) {
 }
 
 function transformCaseData(data: any) {
-  // Format last seen location with time if available
+  // Handle new simplified API format
+  // New format: { id, reporter, person, mark, clothing, lastSeen, foundAt, summary, status, outcome, verifiedBy }
+
+  // Check if it's the new format (has 'id' and 'mark' fields)
+  const isNewFormat = data.id && data.mark !== undefined;
+
+  if (isNewFormat) {
+    return {
+      caseId: data.id || "",
+      title: "Lost & Found Case Summary",
+      reporter: data.reporter || "Unknown",
+      person: {
+        name: data.person || "Unknown",
+        age: "",
+        height: "",
+      },
+      identificationMark: data.mark || "None",
+      clothing: data.clothing || "Not specified",
+      lastSeen: data.lastSeen || "Unknown",
+      foundAt: data.foundAt || "Not found yet",
+      investigationSummary: data.summary ? [data.summary] : [],
+      currentStatus: data.status || "Active",
+      outcome: data.outcome || "Pending",
+      verifiedBy: data.verifiedBy || "Pending",
+      closureNotes: "",
+      timestamp: data.timestamp,
+    };
+  }
+
+  // Handle old format (backward compatibility)
   const lastSeenText = data.last_seen?.location
     ? `${data.last_seen.location}${data.last_seen.time ? ` at ${data.last_seen.time}` : ''}`
     : data.lastSeen || "Unknown";
 
-  // Format found at location with time if available
   const foundAtText = data.found_at?.location
     ? `${data.found_at.location}${data.found_at.time ? ` at ${data.found_at.time}` : ''}`
     : data.foundAt || "Not found yet";
@@ -144,6 +172,41 @@ function transformCaseData(data: any) {
     closureNotes: data.closure_notes || data.closureNotes || "Case ongoing",
     timestamp: data.updated_at || data.timestamp,
   };
+}
+
+/**
+ * Check if case data has meaningful information (not all unknown/default values)
+ */
+function hasMeaningfulCaseData(caseData: any): boolean {
+  const isValidValue = (value: string | undefined | null): boolean => {
+    if (!value) return false;
+    const normalized = value.toLowerCase().trim();
+    return (
+      normalized !== "" &&
+      normalized !== "unknown" &&
+      normalized !== "n/a" &&
+      normalized !== "null" &&
+      normalized !== "undefined" &&
+      normalized !== "none" &&
+      normalized !== "not specified" &&
+      normalized !== "not found yet" &&
+      normalized !== "pending" &&
+      normalized !== "case ongoing"
+    );
+  };
+
+  // Check if at least some fields have meaningful data
+  return (
+    isValidValue(caseData.reporter) ||
+    isValidValue(caseData.person?.name) ||
+    isValidValue(caseData.person?.age) ||
+    isValidValue(caseData.person?.height) ||
+    isValidValue(caseData.identificationMark) ||
+    isValidValue(caseData.clothing) ||
+    isValidValue(caseData.lastSeen) ||
+    isValidValue(caseData.foundAt) ||
+    (caseData.investigationSummary && caseData.investigationSummary.length > 0)
+  );
 }
 
 export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProps) {
@@ -291,13 +354,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
       console.log("👥 [MessageRenderer] Transformed Recipients:", recipients);
 
       return (
-        <div className="space-y-4 w-full">
-          {message.content && (
-            <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
-              {message.content}
-            </p>
-          )}
-
+        <div className="w-full">
           <EmailDispatchStatus
             title="Email to Teams"
             subtitle={message.metadata.email_dispatch.response || "The morning brief has been dispatched to all zone leads and support units. The table below shows live email delivery status — updates will appear as each message is sent or confirmed delivered."}
@@ -332,13 +389,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
 
       return (
         <div className="space-y-4 w-full">
-          {/* Don't show text if it's too short after cleaning - let the card do the talking */}
-          {cleanCaseContent && cleanCaseContent.length > 20 && (
-            <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
-              {cleanCaseContent}
-            </p>
-          )}
-
+          {/* Check temporarily disabled - always show card */}
           <div className="w-full">
             <CaseDetailsCard details={caseData} />
           </div>
@@ -476,12 +527,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
   if (type === "email" && data) {
     const recipients = transformEmailData(data);
     return (
-      <div className="space-y-4 w-full">
-        {text && (
-          <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
-            {text}
-          </p>
-        )}
+      <div className="w-full">
         <EmailDispatchStatus
           title="Email to Teams"
           subtitle={data.response || "Emails have been dispatched to all teams."}
@@ -497,11 +543,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
 
     return (
       <div className="space-y-4 w-full">
-        {text && (
-          <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
-            {text}
-          </p>
-        )}
+        {/* Check temporarily disabled - always show card if not historical */}
         {!isHistorical && (
           <div className="w-full">
             <CaseDetailsCard details={caseData} />
@@ -518,7 +560,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
               <div className="flex-1">
-                <h3 className="font-switzer text-base font-medium text-white">
+                <h3 className="font-switzer text-[18px] font-medium text-white">
                   {caseData.title}
                 </h3>
                 <p className="text-white/60 text-sm mt-1">
