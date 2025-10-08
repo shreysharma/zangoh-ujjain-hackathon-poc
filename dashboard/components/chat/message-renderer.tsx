@@ -224,7 +224,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
         <div className="space-y-4 w-full">
           {/* Text response above the card - hide if it's just summary headers or too short */}
           {cleanContent && cleanContent.length > 50 && !cleanContent.match(/^[\s\n:*\-–—]+$/) && (
-            <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
+            <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white text-justify">
               {cleanContent}
             </p>
           )}
@@ -328,7 +328,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
       return (
         <div className="space-y-4 w-full">
           {message.content && (
-            <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
+            <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white text-justify">
               {message.content}
             </p>
           )}
@@ -372,7 +372,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
         <div className="space-y-4 w-full">
           {/* Show text response if no meaningful data for card, or if there's meaningful content */}
           {(!hasData || (cleanCaseContent && cleanCaseContent.length > 20)) && (
-            <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
+            <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white text-justify">
               {cleanCaseContent || message.content}
             </p>
           )}
@@ -422,7 +422,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
     return (
       <div className="space-y-4 w-full">
         {cleanText && cleanText.length > 50 && !cleanText.match(/^[\s\n:*\-–—]+$/) && (
-          <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
+          <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white text-justify">
             {cleanText}
           </p>
         )}
@@ -519,7 +519,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
     return (
       <div className="space-y-4 w-full">
         {text && (
-          <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
+          <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white text-justify">
             {text}
           </p>
         )}
@@ -541,7 +541,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
       <div className="space-y-4 w-full">
         {/* Show text if no meaningful data or text exists */}
         {(!hasData || text) && (
-          <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
+          <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white text-justify">
             {text || message.content}
           </p>
         )}
@@ -583,7 +583,7 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
   // Default text rendering
   return (
     <div className="space-y-4">
-      <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line">
+      <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-justify">
         {text || message.content}
       </p>
 
