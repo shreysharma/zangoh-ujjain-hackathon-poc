@@ -12,7 +12,6 @@ export interface TeamContact {
 export const TEAM_CONTACTS: TeamContact[] = [
   // Zone Leads
   { email: "saloni@zangoh.com", zone: "Zone 1 Lead – Saloni" },
-  { email: "hello.zangoh@gmail.com", zone: "Zone 2 Lead – P. Joshi" },
   { email: "salonim@newzera.com", zone: "Zone 3 Lead – A. Khan" },
   { email: "isalonim09@gmail.com", zone: "Zone 4 Lead – M. Verma" },
   { email: "shreys@zangoh.com", zone: "Zone 5 Lead – S. Sharma" },

@@ -24,6 +24,7 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const hasLoadedSession = useRef(false);
   const hasProcessedInitialQuery = useRef(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Use the admin chat hook with session management
   const {
@@ -98,6 +99,11 @@ export default function ChatPage() {
     hasLoadedSession.current = false;
     hasProcessedInitialQuery.current = false;
   }, [chatId]);
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   // Load initial query from session storage and send it
   useEffect(() => {
@@ -309,6 +315,9 @@ export default function ChatPage() {
                 </div>
               </div>
             )}
+
+            {/* Scroll anchor */}
+            <div ref={messagesEndRef} />
           </div>
         </div>
 

@@ -146,6 +146,41 @@ function transformCaseData(data: any) {
   };
 }
 
+/**
+ * Check if case data has meaningful information (not all unknown/default values)
+ */
+function hasMeaningfulCaseData(caseData: any): boolean {
+  const isValidValue = (value: string | undefined | null): boolean => {
+    if (!value) return false;
+    const normalized = value.toLowerCase().trim();
+    return (
+      normalized !== "" &&
+      normalized !== "unknown" &&
+      normalized !== "n/a" &&
+      normalized !== "null" &&
+      normalized !== "undefined" &&
+      normalized !== "none" &&
+      normalized !== "not specified" &&
+      normalized !== "not found yet" &&
+      normalized !== "pending" &&
+      normalized !== "case ongoing"
+    );
+  };
+
+  // Check if at least some fields have meaningful data
+  return (
+    isValidValue(caseData.reporter) ||
+    isValidValue(caseData.person?.name) ||
+    isValidValue(caseData.person?.age) ||
+    isValidValue(caseData.person?.height) ||
+    isValidValue(caseData.identificationMark) ||
+    isValidValue(caseData.clothing) ||
+    isValidValue(caseData.lastSeen) ||
+    isValidValue(caseData.foundAt) ||
+    (caseData.investigationSummary && caseData.investigationSummary.length > 0)
+  );
+}
+
 export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProps) {
   const [showBriefModal, setShowBriefModal] = useState(false);
   const { type, data, text } = parseMessageContent(message.content);
@@ -315,6 +350,9 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
       console.log("📁 [MessageRenderer] Case Data from Backend:", message.metadata.case);
       console.log("🎯 [MessageRenderer] Transformed Case Data:", caseData);
 
+      // Check if we have meaningful case data
+      const hasData = hasMeaningfulCaseData(caseData);
+
       // Clean up markdown formatting from case response
       let cleanCaseContent = message.content || '';
 
@@ -332,16 +370,19 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
 
       return (
         <div className="space-y-4 w-full">
-          {/* Don't show text if it's too short after cleaning - let the card do the talking */}
-          {cleanCaseContent && cleanCaseContent.length > 20 && (
+          {/* Show text response if no meaningful data for card, or if there's meaningful content */}
+          {(!hasData || (cleanCaseContent && cleanCaseContent.length > 20)) && (
             <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
-              {cleanCaseContent}
+              {cleanCaseContent || message.content}
             </p>
           )}
 
-          <div className="w-full">
-            <CaseDetailsCard details={caseData} />
-          </div>
+          {/* Only show card if we have meaningful data */}
+          {hasData && (
+            <div className="w-full">
+              <CaseDetailsCard details={caseData} />
+            </div>
+          )}
         </div>
       );
     }
@@ -494,15 +535,18 @@ export function MessageRenderer({ message, onEmailToTeams }: MessageRendererProp
   if (type === "case" && data) {
     const caseData = transformCaseData(data);
     const isHistorical = (caseData as any).isHistorical;
+    const hasData = hasMeaningfulCaseData(caseData);
 
     return (
       <div className="space-y-4 w-full">
-        {text && (
+        {/* Show text if no meaningful data or text exists */}
+        {(!hasData || text) && (
           <p className="font-switzer text-sm md:text-lg leading-relaxed whitespace-pre-line text-white">
-            {text}
+            {text || message.content}
           </p>
         )}
-        {!isHistorical && (
+        {/* Only show card if not historical and has meaningful data */}
+        {!isHistorical && hasData && (
           <div className="w-full">
             <CaseDetailsCard details={caseData} />
           </div>
