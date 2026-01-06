@@ -44,78 +44,6 @@ export interface Ticket {
 }
 
 // ============================================================================
-// DATA
-// ============================================================================
-const ticketsData: Ticket[] = [
-  {
-    id: "#LF-2143",
-    title: "Child Missing",
-    category: "Lost & Found",
-    severity: "high",
-    area: "Gate 2-\nWater Point",
-    sla: ["ACK", "[Overdue +16:12]"],
-    assignee: "Lost People Centre – Desk A (no ACK)",
-    status: "open",
-    sessionCount: 9,
-  },
-  {
-    id: "#T-64012",
-    title: "Elderly Missing",
-    category: "Lost & Found",
-    severity: "high",
-    area: "Gate 3 E-Corridor",
-    sla: ["SLA Met"],
-    assignee: "E-21 / S-14 / P-07",
-    status: "resolved",
-    sessionCount: 12,
-  },
-  {
-    id: "T-64045",
-    title: "Pickpocketing report",
-    category: "Lost & Found",
-    severity: "high",
-    area: "S4 Footbridge",
-    sla: ["ACK", "[Overdue +03:41]"],
-    assignee: "P-21 (pending)",
-    status: "open",
-    sessionCount: 19,
-  },
-  {
-    id: "#T-63998",
-    title: "Water point dry",
-    category: "Lost & Found",
-    severity: "medium",
-    area: "Sangam (M-12)",
-    sla: ["Resolve in 07:45"],
-    assignee: "W-12",
-    status: "in-progress",
-    sessionCount: 15,
-  },
-  {
-    id: "#T-64022",
-    title: "Fainting near queue",
-    category: "Lost & Found",
-    severity: "high",
-    area: "Bay E-4",
-    sla: ["On-scene", "[due 01:30]"],
-    assignee: "FR-3 (ETA 3m)",
-    status: "in-progress",
-    sessionCount: 3,
-  },
-  {
-    id: "#T-63970",
-    title: "Overflowing toilet",
-    category: "Sanitation",
-    severity: "medium",
-    area: "Sector 1",
-    sla: ["Resolve in 10:40"],
-    assignee: "S-07",
-    status: "open",
-    sessionCount: 4,
-  },
-];
-
-// ============================================================================
 // ICON COMPONENTS
 // ============================================================================
 function SearchIcon() {
@@ -672,26 +600,30 @@ function TicketRow({ ticket, selected, onSelect }: TicketRowProps) {
   );
 }
 
-function TicketTable() {
-  const [selectedTickets, setSelectedTickets] = useState<number[]>([]);
+interface TicketTableProps {
+  tickets: Ticket[];
+}
+
+function TicketTable({ tickets }: TicketTableProps) {
+  const [selectedTickets, setSelectedTickets] = useState<string[]>([]);
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      setSelectedTickets(ticketsData.map((_, index) => index));
+      setSelectedTickets(tickets.map((ticket) => ticket.id));
     } else {
       setSelectedTickets([]);
     }
   };
 
-  const handleSelectTicket = (index: number, checked: boolean) => {
+  const handleSelectTicket = (id: string, checked: boolean) => {
     if (checked) {
-      setSelectedTickets([...selectedTickets, index]);
+      setSelectedTickets([...selectedTickets, id]);
     } else {
-      setSelectedTickets(selectedTickets.filter(i => i !== index));
+      setSelectedTickets(selectedTickets.filter((ticketId) => ticketId !== id));
     }
   };
 
-  const allSelected = selectedTickets.length === ticketsData.length && ticketsData.length > 0;
+  const allSelected = selectedTickets.length === tickets.length && tickets.length > 0;
 
   return (
     <div className="bg-[rgba(255,255,255,0.1)] relative rounded-[16px] w-full h-full">
@@ -730,14 +662,18 @@ function TicketTable() {
 
         {/* Ticket Rows with spacing */}
         <div className="flex flex-col gap-[24px] w-full">
-          {ticketsData.map((ticket, index) => (
-            <TicketRow 
-              key={index} 
-              ticket={ticket}
-              selected={selectedTickets.includes(index)}
-              onSelect={(checked) => handleSelectTicket(index, checked)}
-            />
-          ))}
+          {tickets.length === 0 ? (
+            <div className="text-[#e9e8e8] text-sm px-[12px] py-[8px]">No tickets available.</div>
+          ) : (
+            tickets.map((ticket) => (
+              <TicketRow 
+                key={ticket.id} 
+                ticket={ticket}
+                selected={selectedTickets.includes(ticket.id)}
+                onSelect={(checked) => handleSelectTicket(ticket.id, checked)}
+              />
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -748,12 +684,14 @@ function TicketTable() {
 // MAIN PAGE COMPONENT
 // ============================================================================
 export default function TicketsPage() {
+  const [tickets] = useState<Ticket[]>([]);
+
   return (
     <DesktopLayout showTopActions={false}>
       <div className="min-h-screen bg-[#262626] flex flex-col gap-[12px] p-[12px] md:p-[16px] overflow-hidden">
         <TicketHeader />
         <div className="flex-1 overflow-auto">
-          <TicketTable />
+          <TicketTable tickets={tickets} />
         </div>
       </div>
     </DesktopLayout>
