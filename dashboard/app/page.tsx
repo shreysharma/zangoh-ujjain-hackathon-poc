@@ -60,23 +60,25 @@ export default function Home() {
                 <p className="text-red-400 text-xs md:text-sm">{error}</p>
               </div>
             )}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 bg-[#3A3A3A] rounded-lg md:rounded-xl px-3 md:px-5 py-3 md:py-4 border border-white/10">
-              <div className="flex items-center gap-2 sm:gap-3 flex-1">
-                <Plus className="w-4 h-4 md:w-5 md:h-5 text-white flex-shrink-0" />
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="Ask anything — from lost-case summaries to crowd flow insights or daily briefings"
-                  className="flex-1 bg-transparent border-none outline-none text-white font-switzer text-sm md:text-base lg:text-lg leading-relaxed placeholder:text-[#BDBDBD]"
-                />
+            <div className="bg-gradient-to-r from-white/20 via-white/10 to-white/20 rounded-xl md:rounded-2xl p-[1px]">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 bg-[#3A3A3A] rounded-lg md:rounded-xl px-3 md:px-5 py-3 md:py-4">
+                <div className="flex items-center gap-2 sm:gap-3 flex-1">
+                  <Plus className="w-4 h-4 md:w-5 md:h-5 text-white flex-shrink-0" />
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="Ask anything — from lost-case summaries to crowd flow insights or daily briefings"
+                    className="flex-1 bg-transparent border-none outline-none text-white font-switzer text-sm md:text-base lg:text-lg leading-relaxed placeholder:text-[#BDBDBD]"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  className="bg-primary-orange hover:bg-primary-orange/90 text-white px-4 md:px-6 py-2.5 md:py-2 rounded-lg font-medium text-sm md:text-base flex-shrink-0 w-full sm:w-auto"
+                >
+                  Search
+                </Button>
               </div>
-              <Button
-                type="submit"
-                className="bg-primary-orange hover:bg-primary-orange/90 text-white px-4 md:px-6 py-2.5 md:py-2 rounded-lg font-medium text-sm md:text-base flex-shrink-0 w-full sm:w-auto"
-              >
-                Search
-              </Button>
             </div>
           </form>
         </div>

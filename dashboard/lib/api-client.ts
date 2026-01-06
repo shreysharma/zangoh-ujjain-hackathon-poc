@@ -33,6 +33,7 @@ const DEFAULT_HEADERS = {
 };
 
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+const STATIC_AUTH_TOKEN = process.env.NEXT_PUBLIC_AUTH_TOKEN || "";
 
 // Warn if API key is missing
 if (typeof window !== "undefined" && !API_KEY) {
@@ -65,8 +66,11 @@ async function apiFetch<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
+  // Prefer runtime auth token from localStorage, otherwise fall back to a static token for dev
   const token =
-    typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+    typeof window !== "undefined"
+      ? localStorage.getItem("auth_token") || STATIC_AUTH_TOKEN
+      : STATIC_AUTH_TOKEN;
 
   const headers = {
     ...DEFAULT_HEADERS,
