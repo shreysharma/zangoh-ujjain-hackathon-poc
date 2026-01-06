@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { DesktopLayout } from "@/components/layout/desktop-layout";
+import { TicketHeader } from "@/components/tickets/ticket-header";
 
 // ============================================================================
 // SVG PATHS
@@ -590,6 +592,8 @@ interface TicketRowProps {
 }
 
 function TicketRow({ ticket, selected, onSelect }: TicketRowProps) {
+  const detailHref = `/tickets/${encodeURIComponent(ticket.id.replace(/^#/, ""))}`;
+
   return (
     <div className="relative rounded-[8px] shrink-0 w-full">
       <div className="content-stretch flex gap-[8px] items-start px-[12px] py-[6px] relative w-full">
@@ -656,7 +660,13 @@ function TicketRow({ ticket, selected, onSelect }: TicketRowProps) {
           </div>
         </div>
 
-        <ArrowNarrowUpRightIcon />
+        <Link
+          href={detailHref}
+          className="shrink-0 p-2 rounded-lg hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/40"
+          aria-label={`Open ${ticket.id} details`}
+        >
+          <ArrowNarrowUpRightIcon />
+        </Link>
       </div>
     </div>
   );
@@ -741,7 +751,7 @@ export default function TicketsPage() {
   return (
     <DesktopLayout showTopActions={false}>
       <div className="min-h-screen bg-[#262626] flex flex-col gap-[12px] p-[12px] md:p-[16px] overflow-hidden">
-        <GlobalHeader />
+        <TicketHeader />
         <div className="flex-1 overflow-auto">
           <TicketTable />
         </div>
