@@ -40,6 +40,7 @@ EXPOSE 3000
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
+ENV NEXT_PUBLIC_API_BASE_URL=https://divyadarshak-dev-us-central1-backend-api-1089795802250.us-central1.run.app
 
 # Build and start - this will build at runtime with the environment variables
 CMD ["sh", "-c", "npm run build && npm start"]
