@@ -14,10 +14,12 @@ import type {
   SendEmailRequest,
   SendEmailResponse,
   StatisticsApiResponse,
+  AuthApiResponse,
   AdminChatResponse,
   AdminSessionsResponse,
   AdminSessionDetail,
   DeleteSessionResponse,
+  TicketListApiResponse,
 } from "@/types/api";
 
 // ============================================================================
@@ -33,6 +35,7 @@ const DEFAULT_HEADERS = {
 };
 
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+const STATIC_AUTH_TOKEN = process.env.NEXT_PUBLIC_AUTH_TOKEN || "";
 
 // Warn if API key is missing
 if (typeof window !== "undefined" && !API_KEY) {
@@ -65,8 +68,15 @@ async function apiFetch<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
+  // Prefer runtime auth token from localStorage, otherwise fall back to a static token for dev
+  const storedToken =
+    typeof window !== "undefined"
+      ? localStorage.getItem("auth_token")
+      : null;
   const token =
-    typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+    storedToken && storedToken !== "undefined" && storedToken !== "null"
+      ? storedToken
+      : STATIC_AUTH_TOKEN;
 
   const headers = {
     ...DEFAULT_HEADERS,
@@ -338,6 +348,42 @@ export const statisticsApi = {
       params as Record<string, string>
     ).toString();
     return apiFetch(`/statistics/crowd?${queryString}`);
+  },
+};
+
+// ============================================================================
+// AUTH API
+// ============================================================================
+
+export const authApi = {
+  /**
+   * Login with email/password
+   */
+  async login(email: string, password: string): Promise<AuthApiResponse> {
+    return apiFetch("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+  },
+};
+
+// ============================================================================
+// TICKETS API
+// ============================================================================
+
+export const ticketsApi = {
+  /**
+   * List all tickets
+   */
+  async list(): Promise<TicketListApiResponse> {
+    return apiFetch("/tickets");
+  },
+
+  /**
+   * Get ticket details by ID
+   */
+  async getById(ticketId: string): Promise<TicketApiItem> {
+    return apiFetch(`/tickets/${encodeURIComponent(ticketId)}`);
   },
 };
 
@@ -1069,6 +1115,8 @@ export const api = {
   operationsBrief: operationsBriefApi,
   email: emailApi,
   statistics: statisticsApi,
+  auth: authApi,
+  tickets: ticketsApi,
   adminChat: adminChatApi,
 };
 

@@ -44,6 +44,11 @@ export function useAdminSessions(
       const response = await api.adminChat.getSessions();
       setSessions(response.sessions || []);
     } catch (err) {
+      if (err instanceof ApiError && err.message.includes("PostgreSQL not configured")) {
+        setSessions([]);
+        setError(null);
+        return;
+      }
       const errorMsg =
         err instanceof ApiError
           ? err.message
@@ -65,14 +70,18 @@ export function useAdminSessions(
       setIsLoading(true);
       setError(null);
 
-      try {
-        const sessionDetail = await api.adminChat.getSession(sessionId);
-        return sessionDetail;
-      } catch (err) {
-        const errorMsg =
-          err instanceof ApiError
-            ? err.message
-            : `Failed to load session ${sessionId}`;
+    try {
+      const sessionDetail = await api.adminChat.getSession(sessionId);
+      return sessionDetail;
+    } catch (err) {
+      if (err instanceof ApiError && err.message.includes("PostgreSQL URL not configured")) {
+        setError(null);
+        return null;
+      }
+      const errorMsg =
+        err instanceof ApiError
+          ? err.message
+          : `Failed to load session ${sessionId}`;
         setError(errorMsg);
         console.error(`Failed to load session ${sessionId}:`, err);
 

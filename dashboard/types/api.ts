@@ -261,6 +261,43 @@ export interface AuthApiResponse {
 }
 
 // ============================================================================
+// TICKETS API RESPONSES
+// ============================================================================
+
+export interface TicketEvent {
+  type: string;
+  title?: string;
+  category?: string;
+  ticket_id?: string;
+  timestamp?: number;
+  description?: string | null;
+  location_lat?: number | null;
+  location_lng?: number | null;
+  text?: string | null;
+}
+
+export interface TicketApiItem {
+  ticket_id: string;
+  title: string;
+  description: string | null;
+  category: string;
+  conversation_id: string;
+  location_lat: number | null;
+  location_lng: number | null;
+  severity: string;
+  user_id: string;
+  status: string;
+  created_at: string;
+  resolved_at: string | null;
+  conversation_events: TicketEvent[];
+}
+
+export interface TicketListApiResponse {
+  count: number;
+  tickets: TicketApiItem[];
+}
+
+// ============================================================================
 // NOTIFICATION API RESPONSES
 // ============================================================================
 

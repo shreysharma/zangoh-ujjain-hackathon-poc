@@ -20,6 +20,7 @@ COPY . .
 # Learn more here: https://nextjs.org/telemetry
 # Uncomment the following line in case you want to disable telemetry during the build.
 ENV NEXT_TELEMETRY_DISABLED 1
+ENV NEXT_PUBLIC_API_BASE_URL=https://divyadarshak-dev-us-central1-backend-api-1089795802250.us-central1.run.app
 
 RUN npm run build
 
@@ -29,6 +30,7 @@ WORKDIR /app
 
 ENV NODE_ENV production
 ENV NEXT_TELEMETRY_DISABLED 1
+ENV NEXT_PUBLIC_API_BASE_URL=https://divyadarshak-dev-us-central1-backend-api-1089795802250.us-central1.run.app
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
