@@ -18,7 +18,6 @@ COPY app ./app
 COPY components ./components
 COPY hooks ./hooks
 COPY lib ./lib
-COPY public ./public
 COPY types ./types
 COPY next-env.d.ts ./
 COPY next.config.ts ./
