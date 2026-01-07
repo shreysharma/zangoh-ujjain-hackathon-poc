@@ -1,20 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { DesktopLayout } from "@/components/layout/desktop-layout";
 import { TicketHeader } from "@/components/tickets/ticket-header";
 import { ChevronDown, Send } from "lucide-react";
+import { api } from "@/lib/api-client";
 
 type ConversationMode = "Internal Notes" | "Outbound";
 
 interface TicketDetailPageProps {
-  params: {
-    id: string;
-  };
-  searchParams?: {
+  params: { id: string } | Promise<{ id: string }>;
+  searchParams?: Promise<{
     severity?: string;
     sla?: string;
     status?: string;
+    sessionId?: string;
+  }> | {
+    severity?: string;
+    sla?: string;
+    status?: string;
+    sessionId?: string;
   };
 }
 
@@ -28,15 +33,60 @@ interface Message {
 }
 
 export default function TicketDetailPage({ params, searchParams }: TicketDetailPageProps) {
-  const ticketId = decodeURIComponent(params.id);
-  const severity = searchParams?.severity || "High";
-  const sla = searchParams?.sla || "ACK Overdue";
-  const status = searchParams?.status || "Open";
+  const resolvedParams = use(params as any);
+  const resolvedSearch = use(searchParams as any) || {};
+  const ticketId = decodeURIComponent(resolvedParams?.id || "");
+  const severity = resolvedSearch?.severity || "High";
+  const sla = resolvedSearch?.sla || "ACK Overdue";
+  const status = resolvedSearch?.status || "Open";
+  const sessionId = resolvedSearch?.sessionId || ticketId;
 
   const [mode, setMode] = useState<ConversationMode>("Internal Notes");
   const [inputValue, setInputValue] = useState("");
   const [internalMessages, setInternalMessages] = useState<Message[]>([]);
   const [outboundMessages, setOutboundMessages] = useState<Message[]>([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [messageError, setMessageError] = useState<string | null>(null);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let isActive = true;
+    const loadMessages = async () => {
+      if (!sessionId) return;
+      setLoadingMessages(true);
+      setMessageError(null);
+      try {
+        const session = await api.adminChat.getSession(sessionId);
+        if (!isActive) return;
+        const mapped: Message[] = (session.messages || []).map((msg, idx) => ({
+          id: idx,
+          role: msg.role === "assistant" ? "system" : "agent",
+          text: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
+          time: msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+        }));
+        setInternalMessages(mapped);
+      } catch (err) {
+        if (!isActive) return;
+        setMessageError("Failed to load conversation");
+        console.error("Failed to load ticket messages", err);
+      } finally {
+        if (isActive) setLoadingMessages(false);
+      }
+    };
+
+    loadMessages();
+
+    return () => {
+      isActive = false;
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [internalMessages, outboundMessages, mode]);
 
   const handleSend = () => {
     const text = inputValue.trim();
@@ -115,7 +165,7 @@ export default function TicketDetailPage({ params, searchParams }: TicketDetailP
       <div className="min-h-screen bg-[#262626] flex flex-col gap-2 px-3 md:px-4 pb-4 pt-0 overflow-hidden min-h-0">
         <TicketHeader title="Tickets" />
 
-        <div className="flex-1 bg-[rgba(255,255,255,0.08)] rounded-2xl overflow-hidden flex flex-col text-white border border-white/12 shadow-[0_20px_60px_rgba(0,0,0,0.35)] min-h-0">
+        <div className="flex-1 bg-[rgba(255,255,255,0.08)] rounded-2xl overflow-hidden flex flex-col text-white border border-white/12 shadow-[0_20px_60px_rgba(0,0,0,0.35)] min-h-0 h-[780px] max-h-[780px]">
           <div className="flex items-center justify-between px-6 py-4 border-b border-white/12">
             <div className="flex items-center gap-5">
               <span className="text-xl font-medium text-white">#{ticketId}</span>
@@ -204,11 +254,32 @@ export default function TicketDetailPage({ params, searchParams }: TicketDetailP
                   <div className="text-[#74a9ff] text-xs px-2 py-0.5">Hi/En</div>
                 </div>
 
-                <div className="flex-1 flex flex-col overflow-y-auto gap-4 mb-6 min-h-0">
+                <div
+                  ref={messagesRef}
+                  className="flex-1 flex flex-col overflow-y-auto gap-4 mb-6 min-h-0 max-h-[520px] pr-4 mr-[2px]"
+                >
                   <div className="text-center text-[#939393] text-sm mb-2">Today</div>
-                  {mode === "Internal Notes"
-                    ? internalMessages.map((msg) => renderInternalMessage(msg))
-                    : outboundMessages.map((msg) => renderOutboundMessage(msg))}
+                  {mode === "Internal Notes" ? (
+                    <>
+                      {loadingMessages && (
+                        <div className="text-center text-[#c7c7c7] text-sm">Loading messages…</div>
+                      )}
+                      {messageError && (
+                        <div className="text-center text-red-300 text-sm">{messageError}</div>
+                      )}
+                      {!loadingMessages && !messageError && internalMessages.length === 0 && (
+                        <div className="text-center text-[#c7c7c7] text-sm">No internal notes yet.</div>
+                      )}
+                      {internalMessages.map((msg) => renderInternalMessage(msg))}
+                    </>
+                  ) : (
+                    <>
+                      {outboundMessages.length === 0 && (
+                        <div className="text-center text-[#c7c7c7] text-sm">No outbound messages yet.</div>
+                      )}
+                      {outboundMessages.map((msg) => renderOutboundMessage(msg))}
+                    </>
+                  )}
                 </div>
 
                 <div className="bg-[#4b4b4b] rounded-xl p-3 flex items-center gap-3 border border-white/10">
