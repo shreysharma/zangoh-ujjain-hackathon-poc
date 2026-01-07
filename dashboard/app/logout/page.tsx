@@ -14,8 +14,14 @@ export default function LogoutPage() {
       }
     });
 
-    // Redirect to home
-    router.push("/");
+    // Clear auth/session data
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("refresh_token");
+    localStorage.removeItem("auth_user");
+    sessionStorage.removeItem("initialQuery");
+
+    // Redirect to login
+    router.push("/login");
   }, [router]);
 
   return (
