@@ -70,6 +70,45 @@ function buildChatMessages(events: TicketEvent[]): Message[] {
     }));
 }
 
+function extractLostFoundSummary(ticket: TicketApiItem | null) {
+  if (!ticket) {
+    return {
+      reporter: "—",
+      person: "—",
+      lastSeen: "—",
+      beacon: "—",
+      tags: ["Lost and Found", "Priority"],
+    };
+  }
+
+  const reporter = "—";
+  const person = ticket.title?.includes(":")
+    ? ticket.title.split(":").slice(1).join(":").trim() || "—"
+    : "—";
+
+  let lastSeen = "—";
+  let beacon = "—";
+
+  if (ticket.description) {
+    const lastSeenMatch = ticket.description.match(/Last seen:\s*([^\.]+)/i);
+    if (lastSeenMatch?.[1]) {
+      lastSeen = lastSeenMatch[1].trim();
+    }
+    const clothingMatch = ticket.description.match(/Clothing:\s*([^\.]+)/i);
+    if (clothingMatch?.[1]) {
+      beacon = clothingMatch[1].trim();
+    }
+  }
+
+  return {
+    reporter,
+    person,
+    lastSeen,
+    beacon,
+    tags: ["Lost and Found", "Priority"],
+  };
+}
+
 export default function TicketDetailPage({ params, searchParams }: TicketDetailPageProps) {
   const resolvedParams = use(params);
   const resolvedSearchParams = searchParams ? use(searchParams) : undefined;
@@ -138,6 +177,7 @@ export default function TicketDetailPage({ params, searchParams }: TicketDetailP
   const events = ticket?.conversation_events || [];
   const chatMessages = useMemo(() => buildChatMessages(events), [events]);
   const hasAttachment = Boolean((ticket as any)?.attachment_url);
+  const lostFoundSummary = useMemo(() => extractLostFoundSummary(ticket), [ticket]);
 
   const handleSend = () => {
     const text = inputValue.trim();
@@ -255,24 +295,27 @@ export default function TicketDetailPage({ params, searchParams }: TicketDetailP
                 <div className="flex flex-col gap-3 text-sm">
                   <div className="flex gap-3">
                     <span className="text-[#74a9ff] w-20 shrink-0">Reporter:</span>
-                    <span className="text-[#f7f7f7] flex-1">—</span>
+                    <span className="text-[#f7f7f7] flex-1">{lostFoundSummary.reporter}</span>
                   </div>
                   <div className="flex gap-3">
                     <span className="text-[#74a9ff] w-20 shrink-0">Person:</span>
-                    <span className="text-[#f7f7f7] flex-1">—</span>
+                    <span className="text-[#f7f7f7] flex-1">{lostFoundSummary.person}</span>
                   </div>
                   <div className="flex gap-3">
                     <span className="text-[#74a9ff] w-20 shrink-0">Last seen:</span>
-                    <span className="text-[#f7f7f7] flex-1">—</span>
+                    <span className="text-[#f7f7f7] flex-1">{lostFoundSummary.lastSeen}</span>
                   </div>
                   <div className="flex gap-3">
                     <span className="text-[#74a9ff] w-20 shrink-0">Beacon:</span>
-                    <span className="text-[#f7f7f7] flex-1">—</span>
+                    <span className="text-[#f7f7f7] flex-1">{lostFoundSummary.beacon}</span>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <div className="bg-[#e1e2f8] text-[#3840eb] px-2 py-0.5 rounded-lg text-xs">Lost and Found</div>
-                  <div className="bg-[#e1e2f8] text-[#3840eb] px-2 py-0.5 rounded-lg text-xs">Priority</div>
+                  {lostFoundSummary.tags.map((tag) => (
+                    <div key={tag} className="bg-[#e1e2f8] text-[#3840eb] px-2 py-0.5 rounded-lg text-xs">
+                      {tag}
+                    </div>
+                  ))}
                 </div>
               </div>
 

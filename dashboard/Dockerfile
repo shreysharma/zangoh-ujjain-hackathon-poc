@@ -1,55 +1,46 @@
-# Use Node.js LTS version
-FROM node:20-alpine AS base
+# Simple single-stage Dockerfile that accepts runtime environment variables
+FROM node:18-alpine
 
-# Install dependencies only when needed
-FROM base AS deps
-RUN apk add --no-cache libc6-compat
+# Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY package.json package-lock.json* ./
-RUN npm ci
+# Install curl for health checks
+RUN apk --no-cache add curl
 
-# Rebuild the source code only when needed
-FROM base AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+# Copy package files first (for better caching)
+COPY package.json package-lock.json ./
 
-# Next.js collects completely anonymous telemetry data about general usage.
-# Learn more here: https://nextjs.org/telemetry
-# Uncomment the following line in case you want to disable telemetry during the build.
-ENV NEXT_TELEMETRY_DISABLED 1
-ENV NEXT_PUBLIC_API_BASE_URL=https://divyadarshak-dev-us-central1-backend-api-1089795802250.us-central1.run.app
+# Install all dependencies
+RUN npm ci && npm cache clean --force
 
-RUN npm run build
+# Copy source files
+COPY app ./app
+COPY components ./components
+COPY hooks ./hooks
+COPY lib ./lib
+COPY public ./public
+COPY types ./types
+COPY next-env.d.ts ./
+COPY next.config.ts ./
+COPY tsconfig.json ./
+COPY postcss.config.js ./
+COPY tailwind.config.ts ./
 
-# Production image, copy all the files and run next
-FROM base AS runner
-WORKDIR /app
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs && \
+    chown -R nextjs:nodejs /app
 
-ENV NODE_ENV production
-ENV NEXT_TELEMETRY_DISABLED 1
-ENV NEXT_PUBLIC_API_BASE_URL=https://divyadarshak-dev-us-central1-backend-api-1089795802250.us-central1.run.app
-
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-COPY --from=builder /app/public ./public
-
-# Set the correct permission for prerender cache
-RUN mkdir .next
-RUN chown nextjs:nodejs .next
-
-# Automatically leverage output traces to reduce image size
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-
+# Switch to non-root user
 USER nextjs
 
+# Expose port
 EXPOSE 3000
 
-ENV PORT 3000
-ENV HOSTNAME "0.0.0.0"
+# Environment variables will be set at runtime
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
 
-CMD ["node", "server.js"]
+# Build and start - this will build at runtime with the environment variables
+CMD ["sh", "-c", "npm run build && npm start"]

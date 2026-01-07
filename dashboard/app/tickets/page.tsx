@@ -183,9 +183,13 @@ function Avatar({ initials = "DA", color = "#f67965" }: { initials?: string; col
   );
 }
 
-function SearchBar() {
-  const [searchValue, setSearchValue] = useState("");
-
+function SearchBar({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
   return (
     <div className="content-stretch flex flex-col items-start max-h-[40px] min-h-[40px] relative shrink-0 w-[288px]">
       <div className="bg-[rgba(255,255,255,0.05)] h-[40px] relative rounded-[12px] shrink-0 w-full hover:bg-[rgba(255,255,255,0.08)] transition-colors">
@@ -194,8 +198,8 @@ function SearchBar() {
             <SearchIcon />
             <input
               type="text"
-              value={searchValue}
-              onChange={(e) => setSearchValue(e.target.value)}
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
               placeholder="Search"
               className="basis-0 font-['Switzer:Regular',sans-serif] grow h-[24px] leading-[24px] min-h-px min-w-px not-italic overflow-ellipsis overflow-hidden relative shrink-0 text-white text-[16px] bg-transparent border-none outline-none placeholder:text-[#c7c7c7] focus:text-white"
             />
@@ -421,7 +425,13 @@ function truncateId(id: string, length = 20) {
 // ============================================================================
 // HEADER COMPONENT
 // ============================================================================
-function GlobalHeader() {
+function GlobalHeader({
+  searchValue,
+  onSearchChange,
+}: {
+  searchValue: string;
+  onSearchChange: (value: string) => void;
+}) {
   const [timeRange, setTimeRange] = useState("07:00-19:00");
 
   return (
@@ -437,7 +447,7 @@ function GlobalHeader() {
 
           {/* Controls */}
           <div className="content-stretch flex gap-[16px] items-center relative shrink-0">
-            <SearchBar />
+            <SearchBar value={searchValue} onChange={onSearchChange} />
             <Dropdown value={timeRange} onChange={setTimeRange} />
             <ToggleSwitch 
               label="Auto Refresh" 
@@ -668,6 +678,7 @@ export default function TicketsPage() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [searchValue, setSearchValue] = useState("");
 
   useEffect(() => {
     let isActive = true;
@@ -679,7 +690,11 @@ export default function TicketsPage() {
       try {
         const response = await api.tickets.list();
         if (!isActive) return;
-        const mapped = response.tickets.map(mapTicketFromApi);
+        const filtered = response.tickets.filter((ticket) => {
+          const category = (ticket.category || "").toLowerCase();
+          return !["enquiry", "grievance", "support"].includes(category);
+        });
+        const mapped = filtered.map(mapTicketFromApi);
         setTickets(mapped);
       } catch (err) {
         if (!isActive) return;
@@ -702,9 +717,13 @@ export default function TicketsPage() {
   return (
     <DesktopLayout showTopActions={false}>
       <div className="min-h-screen bg-[#262626] flex flex-col gap-[12px] p-[12px] md:p-[16px] overflow-hidden">
-        <TicketHeader />
-        <div className="flex-1 overflow-auto">
-          {error ? (
+          <TicketHeader />
+          <GlobalHeader
+            searchValue={searchValue}
+            onSearchChange={setSearchValue}
+          />
+          <div className="flex-1 overflow-auto">
+            {error ? (
             <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
               {error}
             </div>
@@ -713,7 +732,17 @@ export default function TicketsPage() {
               Loading tickets...
             </div>
           ) : (
-            <TicketTable tickets={tickets} />
+            <TicketTable
+              tickets={tickets.filter((ticket) => {
+                if (!searchValue.trim()) return true;
+                const query = searchValue.toLowerCase();
+                return (
+                  ticket.id.toLowerCase().includes(query) ||
+                  ticket.title.toLowerCase().includes(query) ||
+                  ticket.category.toLowerCase().includes(query)
+                );
+              })}
+            />
           )}
         </div>
       </div>
