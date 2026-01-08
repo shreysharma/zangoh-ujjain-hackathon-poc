@@ -70,6 +70,36 @@ function buildChatMessages(events: TicketEvent[]): Message[] {
     }));
 }
 
+function formatToolSummary(event: any) {
+  if (event.type === "tool_call") {
+    return event.name || event.tool || "Tool call";
+  }
+  if (event.type === "tool_result") {
+    return event.name || event.tool || "Tool result";
+  }
+  if (event.type === "tool_status") {
+    const phase = event.phase ? ` (${event.phase})` : "";
+    return `${event.tool || "Tool"} status${phase}`;
+  }
+  if (event.type === "lost_found_ticket_created") {
+    return `Ticket created: ${event.ticket_public_id || event.ticket_uuid || "—"}`;
+  }
+  return event.type.replace(/_/g, " ");
+}
+
+function extractToolEvents(events: TicketEvent[]) {
+  return events
+    .filter((event) =>
+      ["tool_call", "tool_result", "tool_status", "lost_found_ticket_created"].includes(event.type)
+    )
+    .map((event, index) => ({
+      id: `${event.type}-${event.timestamp}-${index}`,
+      time: formatEventTime(event.timestamp),
+      title: formatToolSummary(event as any),
+      details: event.args || event.response || null,
+    }));
+}
+
 function extractLostFoundSummary(ticket: TicketApiItem | null) {
   if (!ticket) {
     return {
@@ -81,13 +111,16 @@ function extractLostFoundSummary(ticket: TicketApiItem | null) {
     };
   }
 
+  const details = (ticket as any).details || {};
   const reporter = "—";
-  const person = ticket.title?.includes(":")
-    ? ticket.title.split(":").slice(1).join(":").trim() || "—"
-    : "—";
+  const person =
+    details.name ||
+    (ticket.title?.includes(":")
+      ? ticket.title.split(":").slice(1).join(":").trim() || "—"
+      : "—");
 
-  let lastSeen = "—";
-  let beacon = "—";
+  let lastSeen = details.last_seen_location || "—";
+  let beacon = details.clothing || "—";
 
   if (ticket.description) {
     const lastSeenMatch = ticket.description.match(/Last seen:\s*([^\.]+)/i);
@@ -178,6 +211,7 @@ export default function TicketDetailPage({ params, searchParams }: TicketDetailP
   const chatMessages = useMemo(() => buildChatMessages(events), [events]);
   const hasAttachment = Boolean((ticket as any)?.attachment_url);
   const lostFoundSummary = useMemo(() => extractLostFoundSummary(ticket), [ticket]);
+  const toolEvents = useMemo(() => extractToolEvents(events), [events]);
 
   const handleSend = () => {
     const text = inputValue.trim();
@@ -401,6 +435,26 @@ export default function TicketDetailPage({ params, searchParams }: TicketDetailP
                   latitude={ticket.location_lat}
                   longitude={ticket.location_lng}
                 />
+              )}
+              {toolEvents.length > 0 && (
+                <div className="bg-[#3a3a3a] rounded-2xl p-4 flex flex-col gap-3 border border-white/10 shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
+                  <h3 className="text-xl font-medium text-white">Tool Activity</h3>
+                  <div className="flex flex-col gap-3 max-h-[320px] overflow-y-auto text-sm text-white/80">
+                    {toolEvents.map((event) => (
+                      <div key={event.id} className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between text-xs text-white/50">
+                          <span>{event.title}</span>
+                          <span>{event.time}</span>
+                        </div>
+                        {event.details && (
+                          <pre className="whitespace-pre-wrap rounded-lg bg-black/20 p-2 text-[11px] text-white/70">
+                            {JSON.stringify(event.details, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           </div>
