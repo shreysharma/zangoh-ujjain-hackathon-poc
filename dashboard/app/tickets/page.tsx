@@ -717,7 +717,6 @@ export default function TicketsPage() {
   return (
     <DesktopLayout showTopActions={false}>
       <div className="min-h-screen bg-[#262626] flex flex-col gap-[12px] p-[12px] md:p-[16px] overflow-hidden">
-          <TicketHeader />
           <GlobalHeader
             searchValue={searchValue}
             onSearchChange={setSearchValue}
