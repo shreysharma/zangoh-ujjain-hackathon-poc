@@ -4,6 +4,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useGlobalConversation } from '../providers/ConversationProvider'
 import { apiService, type StreamResponse } from '../services/apiService'
 import { audioService } from '../services/audioService'
+import { videoService } from '../services/videoService'
+import { SessionManager } from '../utils/sessionManager'
+import { useStreamConnection } from '../providers/StreamConnectionProvider'
 
 export const useConnectionManager = (showNotification: (message: string, type?: 'success' | 'error' | 'info') => void) => {
   const { 
@@ -13,12 +16,22 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
     addProductLinks,
     updateOrAddBotMessage,
     finalizeStreamingMessage,
-    clearProductMessages
+    clearProductMessages,
+    clearConversation,
+    addStatusMessage
   } = useGlobalConversation()
+  
+  const { canMakeApiCalls, setStreamConnected, setStreamDisconnectionReason } = useStreamConnection()
+  
+  // Set up stream connection checker in apiService
+  useEffect(() => {
+    apiService.setStreamConnectionChecker(() => canMakeApiCalls)
+  }, [canMakeApiCalls])
   
   // Backend connection states
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
+  const [isDisconnecting, setIsDisconnecting] = useState(false)
   const [responseModality, setResponseModality] = useState<'AUDIO' | 'TEXT'>('AUDIO')
   
   // Stream processing states
@@ -29,6 +42,9 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
   // Audio-transcript sync states
   const [currentTranscriptText, setCurrentTranscriptText] = useState('')
   const [displayTranscript, setDisplayTranscript] = useState('')
+  
+  // User input transcript for real-time display
+  const [currentUserTranscript, setCurrentUserTranscript] = useState('')
   
   
   // Audio-transcription sync states
@@ -51,10 +67,20 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
 
   // Handle streaming responses from backend (stabilized to prevent render-time updates)
   const handleStreamResponse = useCallback((data: StreamResponse) => {
-    // console.log('📡 handleStreamResponse called with:', data)
+    
+    // Update stream connection state when receiving messages
+    setStreamConnected(true)
+    
     switch (data.type) {
       case 'connected':
         setCurrentTurnActive(false)
+        setStreamConnected(true)
+        break
+        
+      case 'disconnected':
+      case 'error':
+        setStreamConnected(false)
+        setStreamDisconnectionReason(data.type === 'error' ? 'Stream error occurred' : 'Stream disconnected')
         break
         
       case 'text_chunk':
@@ -67,46 +93,32 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
         break
         
       case 'audio_chunk':
-        console.log('🔊 Received audio_chunk:', { 
-          chunk_number: data.chunk_number, 
-          audio_length: data.audio_data?.length || 0,
-          chunk_size: data.chunk_size,
-          has_audio_data: !!data.audio_data,
-          audio_data_sample: data.audio_data ? data.audio_data.substring(0, 50) + '...' : 'NO DATA'
-        })
         setCurrentTurnActive(true)
         setIsAudioMode(true)
         if (data.audio_data) {
-          console.log('🎵 Calling audioService.playAudioResponse with chunk:', data.chunk_number)
           
           // Display the current transcription text for all chunks of this transcript
           setDisplayTranscript(currentTranscriptTextRef.current)
-          console.log('🎯 Playing chunk', data.chunk_number, 'with current text:', currentTranscriptTextRef.current)
           
           
           // Check if audio context is ready before trying to play
           if (!audioService.isAudioContextReady() || !audioService.isAudioPlaybackEnabled()) {
-            console.log('🚨 Audio chunk received but audio context not ready - attempting auto-activation')
             
             // Try auto-activation based on user history
             audioService.tryAutoActivateFromHistory().then(activated => {
               if (activated) {
-                console.log('✅ Auto-activated audio for incoming chunk!')
                 audioService.setAudioEnabled(true)
                 // Try playing the chunk again
                 audioService.playAudioResponse(data.audio_data!, data.chunk_number)
               } else {
-                console.log('⚠️ Auto-activation failed - showing user prompt')
                 // The button in header will be shown as red to prompt user
               }
             }).catch(error => {
-              console.log('❌ Auto-activation error:', error)
             })
           }
           
           try {
             audioService.playAudioResponse(data.audio_data, data.chunk_number)
-            console.log('✅ audioService.playAudioResponse called successfully')
           } catch (error) {
             console.error('❌ Error calling playAudioResponse:', error)
           }
@@ -117,20 +129,25 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
 
       case 'input_transcription':
         if (data.text && data.text.trim()) {
-          addHumanMessage(data.text.trim())
-          if (currentTurnActiveRef.current) {
-            setCurrentTurnActive(false)
+          const userText = data.text.trim()
+          // Clean HTML/XML tags from stream transcript  
+          const cleanedUserText = userText.replace(/<[^>]*>/g, '').trim()
+          
+          if (cleanedUserText) {
+            // Show cleaned user transcript for real-time display
+            setCurrentUserTranscript(cleanedUserText)
+            
+            // Add to conversation and clear user transcript after a delay
+            addHumanMessage(cleanedUserText)
+            setTimeout(() => {
+              setCurrentUserTranscript('')
+            }, 2000) // Show for 2 seconds before clearing
+            
+            if (currentTurnActiveRef.current) {
+              setCurrentTurnActive(false)
+            }
+          } else {
           }
-          
-          // Clear any lingering text from previous turn when new input starts
-          setCurrentTranscriptText('')
-          setDisplayTranscript('')
-          setCurrentTextBuffer('')
-          setCurrentTranscriptionBuffer('')
-          
-          // Don't clear processed chunks - we removed duplicate detection
-          // audioService.clearProcessedChunks()
-          console.log('🎤 New input transcription received, cleared previous text')
         }
         break
 
@@ -146,83 +163,49 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
           
           // Store current transcription text for the upcoming audio chunks
           setCurrentTranscriptText(data.text)
-          console.log('📝 New transcription text:', data.text)
           
+          let newBuffer = ''
           setCurrentTranscriptionBuffer(prev => {
-            const newBuffer = prev + data.text
+            newBuffer = prev + data.text
             // Always update transcription buffer for live display
             return newBuffer
           })
           
-          // Always store bot messages to localStorage (as UTF-8 original)
-          updateOrAddBotMessage(data.text, true)
+          // Update bot message with accumulated buffer (outside state setter to avoid render loops)
+          updateOrAddBotMessage(newBuffer, true)
         }
         break
         
       case 'turn_complete':
         setCurrentTurnActive(false)
         
+        // Finalize text buffer if available
         if (data.has_text && currentTextBufferRef.current && currentTextBufferRef.current.trim()) {
           finalizeStreamingMessage(currentTextBufferRef.current, false)
         }
         
-        // In audio mode, don't show transcription - just store it for chat view
-        if (isAudioMode && currentTranscriptionBufferRef.current && currentTranscriptionBufferRef.current.trim()) {
-          const cleanedBuffer = currentTranscriptionBufferRef.current.replace(/^null/gi, '').trim()
-          if (cleanedBuffer && cleanedBuffer !== 'null') {
-            // Store transcription silently for chat view without displaying in audio view
-            finalizeStreamingMessage(cleanedBuffer, true)
-          }
-        } else if (currentTranscriptionBufferRef.current && currentTranscriptionBufferRef.current.trim()) {
-          // Text mode - show immediately
+        // Always finalize transcription buffer if it exists
+        if (currentTranscriptionBufferRef.current && currentTranscriptionBufferRef.current.trim()) {
           const cleanedBuffer = currentTranscriptionBufferRef.current.replace(/^null/gi, '').trim()
           if (cleanedBuffer && cleanedBuffer !== 'null') {
             finalizeStreamingMessage(cleanedBuffer, true)
           }
         }
         
-        // Don't clear text immediately - wait for audio to finish playing
-        // Only clear buffers if not in audio mode or if audio queue is empty
-        if (!isAudioMode || audioService.getQueueLength() === 0) {
-          // Text mode or no audio - clear after a longer delay to ensure text is visible
-          setTimeout(() => {
-            setCurrentTextBuffer('')
-            setCurrentTranscriptionBuffer('')
-            setIsAudioMode(false)
-            setShouldShowTranscription(false)
-            
-            // Clear transcript tracking
-            setCurrentTranscriptText('')
-            setDisplayTranscript('')
-            console.log('🧹 Cleared transcript tracking on turn complete (no audio)')
-          }, 2000) // Longer delay for text visibility
-        } else {
-          // Audio mode - don't clear text until audio finishes
-          console.log('🎵 Keeping text visible while audio plays')
-          // The text will be cleared when the next turn starts or on interruption
-        }
-        break
-        
-      case 'interrupted':
-      case 'interruption_triggered':
-        console.log('🛑 AI response interrupted:', data.message)
-        setCurrentTurnActive(false)
+        // Reset states
         setCurrentTextBuffer('')
         setCurrentTranscriptionBuffer('')
         setIsAudioMode(false)
         setShouldShowTranscription(false)
         
-        // Clear transcript tracking on interruption
+        // Clear transcript tracking
         setCurrentTranscriptText('')
         setDisplayTranscript('')
-        
-        // Stop any ongoing audio playback
-        audioService.stopCurrentAudio()
-        audioService.clearAudioQueue()
         break
         
+        
       case 'tool_call_start':
-        addToolMessage('🔍 Processing your request...')
+        // addToolMessage('🔍 Processing your request...')
         break
         
       case 'tool_call_complete':
@@ -235,30 +218,6 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
         break
         
       case 'heartbeat':
-        break
-        
-      case 'input_transcription':
-        // Handle user's speech transcription
-        if (data.text && data.text.trim()) {
-          console.log('🎤 ConnectionManager: User said:', data.text)
-          addHumanMessage(data.text)
-          // Clear any existing buffers when user speaks
-          setCurrentTextBuffer('')
-          setCurrentTranscriptionBuffer('')
-          setCurrentTranscriptText('')
-          setDisplayTranscript('')
-        }
-        break
-        
-      case 'output_transcription':
-        // Handle bot's speech transcription
-        if (data.text) {
-          console.log('📝 ConnectionManager: Bot said:', data.text)
-          setCurrentTranscriptionBuffer(data.text)
-          setCurrentTranscriptText(data.text)
-          // Update or add bot message with transcription
-          updateOrAddBotMessage(data.text, true)
-        }
         break
         
       default:
@@ -274,21 +233,77 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
     showNotification('Connecting to AI backend...')
     
     try {
-      console.log('🔌 Connecting with response modality:', responseModality)
+      // const certOk = await apiService.checkCertificateStatus()
+      
+      // if (!certOk) {
+      //   const userChoice = confirm(
+      //     '🔒 SSL Certificate Setup Required\n\n' +
+      //     'The backend server is using HTTPS with a self-signed certificate.\n' +
+      //     'You need to accept this certificate in your browser first.\n\n' +
+      //     '📋 Instructions:\n' +
+      //     '1. Click OK to open the backend URL in a new tab\n' +
+      //     '2. You\'ll see a security warning - click "Advanced"\n' +
+      //     '3. Click "Proceed to localhost (unsafe)"\n' +
+      //     '4. Return to this tab and click Connect again\n\n' +
+      //     'Click OK to open backend URL, or Cancel to continue without backend.'
+      //   )
+        
+      //   if (userChoice) {
+      //     const { config } = await import('../config/appConfig')
+      //     window.open(config.api.baseUrl + '/', '_blank')
+      //     showNotification('Please accept the certificate in the new tab and click Connect again')
+      //     setIsConnecting(false)
+      //     return
+      //   } else {
+      //     setIsConnecting(false)
+      //     showNotification('Connection cancelled')
+      //     return
+      //   }
+      // }
+      
       await apiService.connect(responseModality)
       setIsConnected(true)
+      
+      // Activate audio context if in audio mode and mic is already on
+      if (responseModality === 'AUDIO') {
+        try {
+          const audioActivated = await audioService.activateAudioContext()
+          if (audioActivated) {
+          } else {
+          }
+        } catch (error) {
+        }
+      }
+      
       // showNotification(`Connected to AI backend in ${responseModality} mode!`, 'success')
+      
+      // Update stream connection state
+      setStreamConnected(true)
+      
+      // Add status message for successful connection
+      // addStatusMessage('🔗 Connected to AI Assistant')
+      
+      // Create new conversation session when connecting
+      const sessionId = SessionManager.createNewSession()
+      SessionManager.updateSessionConnection(true, responseModality)
       
       // Clear product messages when manually connecting
       clearProductMessages()
-      console.log('🗑️ Cleared product messages on manual connect')
       
       apiService.startEventStream(handleStreamResponse)
-      
+
     } catch (error) {
       console.error('Connection error:', error)
       setIsConnected(false)
+      
+      // Update stream connection state with reason
+      setStreamConnected(false)
+      setStreamDisconnectionReason(error instanceof Error ? error.message : 'Connection failed')
+      
       showNotification(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
+      
+      // Add status message for connection failure
+      // addStatusMessage('❌ Connection Failed')
     } finally {
       setIsConnecting(false)
     }
@@ -296,36 +311,56 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
 
   // Manual disconnect function
   const handleDisconnect = useCallback(async () => {
+    // Prevent multiple disconnect calls
+    if (isDisconnecting || !isConnected) {
+      return
+    }
+    
+    setIsDisconnecting(true)
+    
     try {
       await apiService.disconnect()
       setIsConnected(false)
+      
+      // Update stream connection state
+      setStreamConnected(false)
+      setStreamDisconnectionReason('User disconnected')
+      
       showNotification('Disconnected from AI backend')
+      
+      // Add status message for successful disconnection
+      // addStatusMessage('🔌 Disconnected from AI Assistant')
+      
+      // End current conversation session when disconnecting
+      await SessionManager.endCurrentSession()
+      
+      // Clear conversation from localStorage and memory
+      clearConversation()
       
       audioService.stopAudioProcessing()
       audioService.clearAudioQueue()
+      videoService.stopVideoStream()
     } catch (error) {
       console.error('Disconnect error:', error)
       showNotification('Disconnect error')
+    } finally {
+      setIsDisconnecting(false)
     }
-  }, [showNotification])
+  }, [isDisconnecting, isConnected, showNotification, clearConversation])
 
   // Handle connection toggle
   const handleConnectionToggle = useCallback(async () => {
-    if (isConnecting) return
+    if (isConnecting) {
+      return
+    }
     
     if (isConnected) {
       await handleDisconnect()
-      
-      const nextModality = responseModality === 'AUDIO' ? 'AUDIO' : 'AUDIO'
-      setResponseModality(nextModality)
-      
-      setTimeout(async () => {
-        await handleConnect()
-      }, 500)
-    } else {
+    } else if (!isDisconnecting) {
       await handleConnect()
+    } else {
     }
-  }, [isConnecting, isConnected, responseModality, handleDisconnect, handleConnect])
+  }, [isConnecting, isDisconnecting, isConnected, handleDisconnect, handleConnect])
 
   // Chat message handler
   const handleChatMessage = useCallback(async (message: string) => {
@@ -366,25 +401,28 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
     try {
       await apiService.sendText(message)
     } catch (error) {
-      console.error('Failed to send message:', error)
-      showNotification(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      console.error('❌ Failed to send message:', error)
+      showNotification(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
     }
   }, [isConnected, addHumanMessage, addBotMessage, showNotification])
 
-  // File upload handler
+  // File upload handler  
   const handleFileUpload = useCallback(async (file: File) => {
-    const fileUrl = URL.createObjectURL(file)
-    
-    const fileInfo = {
-      name: file.name,
-      type: file.type,
-      url: fileUrl
-    }
-    
     if (file.type.startsWith('image/')) {
-      addHumanMessage('', fileInfo)
+      // For images, add message with file info for preview (but don't store large data in localStorage)
+      const previewUrl = URL.createObjectURL(file)
+      addHumanMessage(`📎 Uploaded image: ${file.name}`, {
+        name: file.name,
+        type: file.type,
+        previewUrl: previewUrl  // This won't be stored in localStorage due to JSON.stringify limits
+      })
+      
+      // Clean up the preview URL after 30 seconds to prevent memory leaks
+      setTimeout(() => {
+        URL.revokeObjectURL(previewUrl)
+      }, 30000)
     } else {
-      addHumanMessage(`📎 Uploaded file: ${file.name}`, fileInfo)
+      addHumanMessage(`📎 Uploaded file: ${file.name}`)
     }
     
     if (file.type.startsWith('image/') && isConnected) {
@@ -405,40 +443,27 @@ export const useConnectionManager = (showNotification: (message: string, type?: 
     }
   }, [isConnected, addHumanMessage, showNotification])
 
-  // Monitor audio playback to clear text when audio finishes
-  useEffect(() => {
-    if (isAudioMode && !currentTurnActive) {
-      const checkInterval = setInterval(() => {
-        // Check if audio has finished playing
-        if (!audioService.isPlaying && audioService.getQueueLength() === 0) {
-          console.log('🎵 Audio finished, clearing display text')
-          setCurrentTranscriptText('')
-          setDisplayTranscript('')
-          setIsAudioMode(false)
-          clearInterval(checkInterval)
-        }
-      }, 500) // Check every 500ms
-      
-      return () => clearInterval(checkInterval)
-    }
-  }, [isAudioMode, currentTurnActive])
-
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      // Direct cleanup on unmount without using handleDisconnect to avoid dependency cycles
       apiService.disconnect()
       audioService.stopAudioProcessing()
       audioService.clearAudioQueue()
+      videoService.stopVideoStream()
+      clearConversation()
     }
-  }, [])
+  }, [clearConversation])
 
   return {
     isConnected,
     isConnecting,
+    isDisconnecting,
     responseModality,
     currentTurnActive,
     currentTranscriptionBuffer,
     displayTranscript,
+    currentUserTranscript,
     isAudioMode,
     handleConnect,
     handleDisconnect,

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed:*)",
+      "Bash(git checkout:*)",
+      "Bash(for:*)",
+      "Bash(do sed -i '' '/console\\.log/d' \"$file\")",
+      "Bash(done)",
+      "Bash(node:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

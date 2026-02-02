@@ -1,5 +1,5 @@
 // Authentication utilities
-import { config } from '../config/appConfig'
+import { config } from '@/config/appConfig'
 import { getErrorMessage } from './errorMessages'
 
 export const AUTH_CONFIG = {
@@ -12,23 +12,20 @@ export const authUtils = {
   // Login with external API
   login: async (username: string, password: string): Promise<{ success: boolean; error?: string; token?: string }> => {
     try {
-      console.log('Login URL:', AUTH_CONFIG.loginApiUrl);
-      console.log('config.api.baseUrl:', config.api.baseUrl);
+      const loginUrl = AUTH_CONFIG.loginApiUrl;
       
-      // Create query parameters as the backend expects
-      const params = new URLSearchParams({
-        username: username,
-        password: password
-      });
-      
-      const loginUrl = `${AUTH_CONFIG.loginApiUrl}?${params.toString()}`;
+      // Create form data as the backend expects
+      const formData = new URLSearchParams();
+      formData.append('username', username);
+      formData.append('password', password);
       
       const response = await fetch(loginUrl, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
           'ngrok-skip-browser-warning': 'true'
         },
+        body: formData.toString(),
         mode: 'cors'
       })
 
@@ -88,7 +85,6 @@ export const authUtils = {
       const timeDifference = currentTime - parsedData.timestamp
       
       if (timeDifference > AUTH_CONFIG.sessionDuration) {
-        console.log('Session expired, removing token')
         localStorage.removeItem(AUTH_CONFIG.loginKey)
         return false
       }

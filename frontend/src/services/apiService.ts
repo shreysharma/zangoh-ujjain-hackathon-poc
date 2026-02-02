@@ -3,9 +3,11 @@
 // Handles all communication with the Python backend
 
 import { config } from "../config/appConfig";
+import { authUtils } from "../utils/auth";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { getApiErrorMessage, getErrorMessage } from "../utils/errorMessages";
 import { notificationService } from "./notificationService";
+import { apiCounterService } from "./apiCounterService";
 
 interface ConnectRequest {
   response_modalities: string[];
@@ -60,35 +62,47 @@ class ApiService {
   private baseUrl: string;
   private eventSource: EventSource | null = null;
   private isConnected = false;
-  private isStreamActive = false;
-  private isConnecting = false;
-  private streamController: AbortController | null = null;
-  private lastEventTime = 0;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 3;
+  private streamConnectionChecker: (() => boolean) | null = null;
+  private abortController: AbortController | null = null;
 
   constructor() {
     this.baseUrl = config.api.baseUrl;
   }
 
-  // Get headers with API key authentication
+  // Set stream connection checker function
+  setStreamConnectionChecker(checker: () => boolean) {
+    this.streamConnectionChecker = checker;
+  }
+
+  // Check if stream is connected
+  private canMakeApiCalls(): boolean {
+    if (!this.streamConnectionChecker) return true; // Default to true if no checker set
+    return this.streamConnectionChecker();
+  }
+
+  // Get headers with JWT token and API key
   private getHeaders(): HeadersInit {
-    const headers: Record<string, string> = {
+    const headers: HeadersInit = {
       "Content-Type": "application/json",
     };
-    
+
     // Add API key if available
-    const apiKey = process.env.NEXT_PUBLIC_API_KEY;
-    if (apiKey) {
-      headers["x-api-key"] = apiKey;
+    if (process.env.NEXT_PUBLIC_API_KEY) {
+      headers["x-api-key"] = process.env.NEXT_PUBLIC_API_KEY;
     }
-    
+
+    const token = authUtils.getToken();
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
     return headers;
   }
 
   // Health check for certificate validation
   async checkCertificateStatus(): Promise<boolean> {
     try {
+      apiCounterService.trackHealthCheck();
       const response = await fetch(`${this.baseUrl}/health`, {
         method: "GET",
         signal: AbortSignal.timeout(config.api.timeout),
@@ -102,6 +116,7 @@ class ApiService {
   // Health check for API availability (uses frontend API route to avoid CORS)
   async checkHealth(): Promise<boolean> {
     try {
+      apiCounterService.trackHealthCheck();
       const response = await fetch(`/api/health`, {
         method: "GET",
         signal: AbortSignal.timeout(config.api.timeout),
@@ -116,20 +131,8 @@ class ApiService {
 async connect(
   responseModality: "AUDIO" | "TEXT" = "AUDIO"
 ): Promise<boolean> {
-  // Don't connect if already connected or currently connecting
-  if (this.isConnected) {
-    console.log("🔌 Already connected to API");
-    return true;
-  }
-  
-  if (this.isConnecting) {
-    console.log("🔌 Connection already in progress");
-    return true;
-  }
-
-  this.isConnecting = true;
-
   try {
+    apiCounterService.trackConnectApi();
     const systemInstructions =
       this.getSystemInstructionsForModality(responseModality);
 
@@ -142,19 +145,31 @@ async connect(
       } as ConnectRequest),
     });
 
+    if (response.status === 401) {
+      const errorData = await response.json();
+
+      if (errorData?.detail) {
+        alert(`⚠️ ${errorData.detail}`);
+
+        localStorage.removeItem("indiamart_login_token");
+        localStorage.removeItem("indiamart_jwt_token");
+
+        window.location.href = "/";
+        return false; // Explicit return false here
+      }
+    }
+
     if (response.ok) {
       this.isConnected = true;
-      this.isConnecting = false;
-      console.log("🔌 Connected to API");
       return true;
     } else {
-      this.isConnecting = false;
+      apiCounterService.trackConnectionError();
       const friendlyError = getErrorMessage(response.status);
       notificationService.showError(friendlyError.message);
       return false;
     }
   } catch (error) {
-    this.isConnecting = false;
+    apiCounterService.trackConnectionError();
     // Convert to friendly error message and show notification
     if (error instanceof Error) {
       const friendlyMessage = getApiErrorMessage(error);
@@ -171,22 +186,40 @@ async connect(
   // Disconnect from API
 async disconnect(): Promise<void> {
   try {
+    apiCounterService.trackDisconnectApi();
     const response = await fetch(`${this.baseUrl}/disconnect`, {
       method: "POST",
-      headers: this.getHeaders(),
+      headers: this.getHeaders(), // ✅ Add headers here
     });
 
+    if (response.status === 401) {
+      const errorData = await response.json();
+
+      if (errorData?.detail) {
+        alert(`⚠️ ${errorData.detail}`);
+
+        localStorage.removeItem("indiamart_login_token");
+        localStorage.removeItem("indiamart_jwt_token");
+
+        window.location.href = "/";
+        return; // Explicitly return here to stop further execution
+      }
+    }
+
     this.isConnected = false;
-    this.isConnecting = false;
 
     // Close SSE connection
     if (this.eventSource) {
       this.eventSource.close();
       this.eventSource = null;
     }
-    this.isStreamActive = false;
 
-    console.log("🔌 Disconnected from API.");
+    // Abort any ongoing fetch operations
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+
   } catch (error) {
     console.error("❌ Disconnect error:", error);
   }
@@ -197,8 +230,12 @@ async disconnect(): Promise<void> {
     if (!this.isConnected) {
       throw new Error("Not connected to API");
     }
+    if (!this.canMakeApiCalls()) {
+      throw new Error("Stream disconnected");
+    }
 
     try {
+      apiCounterService.trackSendText();
       const response = await fetch(`${this.baseUrl}/send_text`, {
         method: "POST",
         headers: this.getHeaders(),
@@ -216,37 +253,13 @@ async disconnect(): Promise<void> {
         } catch {
           // Use status text if parsing fails
         }
-        
-        // Handle specific Live API WebSocket closure error
-        if (typeof errorDetail === 'string' && errorDetail.includes('Failed to send message to Live API') && errorDetail.includes('1000 (OK)')) {
-          // Mark as disconnected so UI can handle reconnection
-          this.isConnected = false;
-          // Don't show notification - let the UI show the error message in chat
-          throw new Error("API_NOT_CONNECTED");
-        }
-        
         // Use friendly error message and show notification
         const friendlyError = getErrorMessage(response.status);
         notificationService.showError(friendlyError.message);
         return;
       }
 
-      console.log("Text message sent, waiting for SSE response...");
     } catch (error) {
-      // Handle specific Live API WebSocket closure error
-      if (error instanceof Error && error.message.includes('Failed to send message to Live API') && error.message.includes('1000 (OK)')) {
-        this.isConnected = false;
-        // Trigger reconnection after a brief delay
-        setTimeout(async () => {
-          try {
-            await this.connect();
-          } catch (reconnectError) {
-            console.error("Reconnection failed:", reconnectError);
-          }
-        }, 2000);
-        throw new Error("API_NOT_CONNECTED");
-      }
-      
       // Convert to friendly error message and show notification
       if (error instanceof Error && !error.message.includes("temporarily")) {
         const friendlyMessage = getApiErrorMessage(error);
@@ -256,15 +269,21 @@ async disconnect(): Promise<void> {
       }
     }
   }
-is
+
   // Send audio chunk
   async sendAudio(pcmData: Int16Array): Promise<void> {
     if (!this.isConnected) return;
+    if (!this.canMakeApiCalls()) {
+      return;
+    }
 
     try {
       const base64Audio = btoa(
         String.fromCharCode(...new Uint8Array(pcmData.buffer))
       );
+
+      // Track the sendAudio call with data size
+      apiCounterService.trackSendAudio(pcmData.buffer.byteLength);
 
       const response = await fetch(`${this.baseUrl}/send_audio`, {
         method: "POST",
@@ -272,8 +291,32 @@ is
         body: JSON.stringify({ audio_data: base64Audio } as SendAudioRequest),
       });
 
+      if (response.status === 401) {
+        const errorData = await response.json();
+
+        if (
+          errorData?.detail ===
+          "You have been logged in elsewhere; this session is now invalid"
+        ) {
+          // Show notification (replace with your UI logic)
+          alert(
+            "⚠️ You have been logged in elsewhere; this session is now invalid."
+          );
+
+          // Clear auth token
+          localStorage.removeItem("indiamart_login_token");
+          localStorage.removeItem("indiamart_jwt_token");
+
+          // Redirect to login page
+          window.location.href = "/";
+
+          // Stop further processing
+          return;
+        }
+      }
 
       if (!response.ok) {
+        apiCounterService.trackAudioError();
         // Silently handle 500 errors for send_audio API - no notifications
         if (response.status === 500) {
           return; // Exit silently for 500 errors
@@ -295,6 +338,7 @@ is
         return;
       }
     } catch (error) {
+      apiCounterService.trackAudioError();
       // Only log network/connection errors, not HTTP errors
       if (error instanceof TypeError && error.message.includes('fetch')) {
         notificationService.showError("Connection lost. Please check your network.", 3000);
@@ -304,53 +348,34 @@ is
     }
   }
 
-  // Send interruption signal to stop bot from speaking
-  async sendInterruption(): Promise<void> {
-    if (!this.isConnected) return;
-
-    try {
-      const response = await fetch(`${this.baseUrl}/interrupt`, {
-        method: "POST",
-        headers: this.getHeaders(),
-        body: JSON.stringify({ action: "interrupt" }),
-      });
-
-      if (!response.ok) {
-        notificationService.showError("Failed to send interruption signal", 2000);
-      } else {
-        console.log("🛑 Interruption signal sent to backend");
-      }
-    } catch (error) {
-      notificationService.showError("Failed to send interruption signal", 2000);
-    }
-  }
 
   // Send image frame (simplified to match original)
   async sendImage(base64Image: string): Promise<void> {
     if (!this.isConnected) return;
 
     try {
-      console.log(
-        "Sending image to backend, base64 length:",
-        base64Image.length
-      );
+      apiCounterService.trackSendImage();
 
-      await fetch(`${this.baseUrl}/send_image`, {
+      const response = await fetch(`${this.baseUrl}/send_image`, {
         method: "POST",
         headers: this.getHeaders(),
         body: JSON.stringify({ image_data: base64Image } as SendImageRequest),
       });
 
-      console.log("Image sent to backend");
+      if (!response.ok) {
+        // Don't show error notification, don't disconnect - just log and continue like video frames
+        return;
+      }
+
     } catch (error) {
-      notificationService.showError("Failed to send image. Please try again.", 3000);
+      // Don't show error notification, don't disconnect - just log and continue like video frames
     }
   }
 
   // Upload JSON data to backend
   async uploadJson(filename: string, conversationData: any): Promise<void> {
     try {
-      console.log("📤 Uploading conversation JSON to backend:", filename);
+      apiCounterService.trackUploadJson();
 
       const requestData: UploadJsonRequest = {
         filename: filename,
@@ -370,7 +395,6 @@ is
         throw new Error(`HTTP ${response.status}: ${errorText}`);
       }
 
-      console.log("✅ Conversation JSON uploaded successfully:", filename);
     } catch (error) {
       notificationService.showError("Failed to upload conversation data", 3000);
     }
@@ -378,37 +402,39 @@ is
 
   // Start Server-Sent Events stream
   startEventStream(onMessage: (data: StreamResponse) => void): void {
-    // Don't start a new stream if one already exists
-    if (this.isStreamActive) {
-      console.log("📡 Event stream already active");
-      return;
-    }
-
-    this.isStreamActive = true;
-    this.reconnectAttempts = 0;
-
-    // Create new abort controller for this stream
-    this.streamController = new AbortController();
-
-    const headers = this.getHeaders() as Record<string, string>;
-
-    // Setup SSE endpoint URL with API key as query parameter
-    const url = new URL(`${this.baseUrl}/stream_responses`);
-    const apiKey = process.env.NEXT_PUBLIC_API_KEY;
-    if (apiKey) {
-      url.searchParams.append('api_key', apiKey);
-    }
+    // Close any existing stream first
+    this.closeEventStream();
     
+    // Create new abort controller for this stream
+    this.abortController = new AbortController();
+    
+    const headers = this.getHeaders() as Record<string, string>;
+    const token = authUtils.getToken();
+
+    // Add token and API key as query parameters
+    const url = new URL(`${this.baseUrl}/stream_responses`);
+    if (token) {
+      url.searchParams.append('token', token);
+    }
+    if (process.env.NEXT_PUBLIC_API_KEY) {
+      url.searchParams.append('api_key', process.env.NEXT_PUBLIC_API_KEY);
+    }
+
+    // Store reference to this for callback context
+    const self = this;
+
     fetchEventSource(url.toString(), {
-      headers: headers,
+      signal: this.abortController.signal,
+      headers: {
+        Authorization: `Bearer ${token}` || "",
+      },
       method: "GET",
-      signal: this.streamController.signal,
-      onopen(res) {
+      async onopen(res) {
         if (
           res.ok &&
           res.headers.get("content-type")?.includes("text/event-stream")
         ) {
-          console.log("🔌 SSE connection opened");
+          apiCounterService.trackStreamConnection();
         } else {
           throw new Error(`❌ Unexpected response: ${res.status}`);
         }
@@ -416,45 +442,40 @@ is
       onmessage(msg) {
         try {
           const data = JSON.parse(msg.data) as StreamResponse;
-          // console.log("📡 SSE Event received:", data.type, data);
           onMessage(data);
         } catch (err) {
           console.error("❌ Failed to parse SSE message:", err);
         }
       },
-      onclose: () => {
-        console.log("🔌 SSE connection closed");
-        this.isStreamActive = false;
+      onclose() {
+        apiCounterService.trackStreamDisconnection();
       },
-      onerror: (err) => {
-        console.error("SSE error:", err);
+      onerror(err) {
+        console.error("❌ SSE connection error:", err);
+        apiCounterService.trackStreamError();
         notificationService.showError("Connection lost. Reconnecting...", 2000);
         setTimeout(() => {
-          this.startEventStream(onMessage);
-        }, 3000);
+          apiCounterService.trackStreamReconnection();
+          self.startEventStream(onMessage);
+        }, 20);
       },
     });
   }
 
   // Close event stream
   closeEventStream(): void {
-    console.log('🔌 Closing event stream...')
-    
-    // Abort the fetch request
-    if (this.streamController) {
-      this.streamController.abort();
-      this.streamController = null;
+    // Abort fetch event source
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+      // Decrement stream counter when manually closing
     }
     
-    // Close event source if exists
+    // Close traditional event source (if any)
     if (this.eventSource) {
       this.eventSource.close();
       this.eventSource = null;
     }
-    
-    this.isStreamActive = false;
-    this.reconnectAttempts = 0;
-    console.log('✅ Event stream closed')
   }
 
   // Get system instructions based on modality
