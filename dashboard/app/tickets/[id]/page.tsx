@@ -1,0 +1,465 @@
+"use client";
+
+import { use, useEffect, useMemo, useState } from "react";
+import { DesktopLayout } from "@/components/layout/desktop-layout";
+import { TicketHeader } from "@/components/tickets/ticket-header";
+import { ChevronDown, Send } from "lucide-react";
+import { api, ApiError } from "@/lib/api-client";
+import type { TicketApiItem, TicketEvent } from "@/types/api";
+import { MapView } from "@/components/ui/map-view";
+
+type ConversationMode = "Internal Notes" | "Outbound";
+
+interface TicketDetailPageProps {
+  params: Promise<{
+    id: string;
+  }>;
+  searchParams?: Promise<{
+    severity?: string;
+    sla?: string;
+    status?: string;
+  }>;
+}
+
+interface Message {
+  id: number;
+  role: "agent" | "system" | "user";
+  text: string;
+  time: string;
+  name?: string;
+  duration?: string;
+}
+
+function normalizeSeverity(value?: string | null) {
+  const normalized = (value || "").toLowerCase();
+  if (normalized === "high" || normalized === "low") return normalized;
+  return "medium";
+}
+
+function formatEventTime(timestamp?: number) {
+  if (!timestamp) return "—";
+  const date = new Date(timestamp * 1000);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatEventTitle(event: TicketEvent) {
+  if (event.type === "ticket_created") return "Ticket created";
+  if (event.type === "input_transcription") return "User said";
+  if (event.type === "output_transcription") return "Assistant replied";
+  if (event.type === "tool_call") return "Tool call";
+  if (event.type === "tool_result") return "Tool result";
+  return event.type.replace(/_/g, " ");
+}
+
+function formatLabel(value: string) {
+  if (!value) return value;
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function buildChatMessages(events: TicketEvent[]): Message[] {
+  return events
+    .filter((event) => event.type === "input_transcription" || event.type === "output_transcription")
+    .filter((event) => event.text && event.text.trim().length > 0)
+    .map((event, index) => ({
+      id: event.timestamp ? Math.round(event.timestamp * 1000) + index : Date.now() + index,
+      role: event.type === "input_transcription" ? "user" : "system",
+      text: event.text || "",
+      time: formatEventTime(event.timestamp),
+      duration: "",
+    }));
+}
+
+function formatToolSummary(event: any) {
+  if (event.type === "tool_call") {
+    return event.name || event.tool || "Tool call";
+  }
+  if (event.type === "tool_result") {
+    return event.name || event.tool || "Tool result";
+  }
+  if (event.type === "tool_status") {
+    const phase = event.phase ? ` (${event.phase})` : "";
+    return `${event.tool || "Tool"} status${phase}`;
+  }
+  if (event.type === "lost_found_ticket_created") {
+    return `Ticket created: ${event.ticket_public_id || event.ticket_uuid || "—"}`;
+  }
+  return event.type.replace(/_/g, " ");
+}
+
+function extractToolEvents(events: TicketEvent[]) {
+  return events
+    .filter((event) =>
+      ["tool_call", "tool_result", "tool_status", "lost_found_ticket_created"].includes(event.type)
+    )
+    .map((event, index) => ({
+      id: `${event.type}-${event.timestamp}-${index}`,
+      time: formatEventTime(event.timestamp),
+      title: formatToolSummary(event as any),
+      details: event.args || event.response || null,
+    }));
+}
+
+function extractLostFoundSummary(ticket: TicketApiItem | null) {
+  if (!ticket) {
+    return {
+      reporter: "—",
+      person: "—",
+      lastSeen: "—",
+      beacon: "—",
+      tags: ["Lost and Found", "Priority"],
+    };
+  }
+
+  const details = (ticket as any).details || {};
+  const reporter = "—";
+  const person =
+    details.name ||
+    (ticket.title?.includes(":")
+      ? ticket.title.split(":").slice(1).join(":").trim() || "—"
+      : "—");
+
+  let lastSeen = details.last_seen_location || "—";
+  let beacon = details.clothing || "—";
+
+  if (ticket.description) {
+    const lastSeenMatch = ticket.description.match(/Last seen:\s*([^\.]+)/i);
+    if (lastSeenMatch?.[1]) {
+      lastSeen = lastSeenMatch[1].trim();
+    }
+    const clothingMatch = ticket.description.match(/Clothing:\s*([^\.]+)/i);
+    if (clothingMatch?.[1]) {
+      beacon = clothingMatch[1].trim();
+    }
+  }
+
+  return {
+    reporter,
+    person,
+    lastSeen,
+    beacon,
+    tags: ["Lost and Found", "Priority"],
+  };
+}
+
+export default function TicketDetailPage({ params, searchParams }: TicketDetailPageProps) {
+  const resolvedParams = use(params);
+  const resolvedSearchParams = searchParams ? use(searchParams) : undefined;
+  const ticketId = decodeURIComponent(resolvedParams.id);
+  const [ticket, setTicket] = useState<TicketApiItem | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [mode, setMode] = useState<ConversationMode>("Internal Notes");
+  const [inputValue, setInputValue] = useState("");
+  const [internalMessages, setInternalMessages] = useState<Message[]>([]);
+  const [outboundMessages, setOutboundMessages] = useState<Message[]>([]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const loadTicket = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const response = await api.tickets.list();
+        if (!isActive) return;
+        const found = response.tickets.find(
+          (item) => item.ticket_id === ticketId || `#${item.ticket_id}` === ticketId
+        );
+        setTicket(found || null);
+      } catch (err) {
+        if (!isActive) return;
+        setError(
+          err instanceof ApiError ? err.message : "Failed to load ticket."
+        );
+      } finally {
+        if (isActive) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    loadTicket();
+    return () => {
+      isActive = false;
+    };
+  }, [ticketId]);
+
+  const severity = useMemo(() => {
+    if (ticket) return formatLabel(normalizeSeverity(ticket.severity));
+    return formatLabel((resolvedSearchParams?.severity || "High").toLowerCase());
+  }, [ticket, resolvedSearchParams?.severity]);
+
+  const status = useMemo(() => {
+    if (ticket?.status) return formatLabel(ticket.status);
+    return formatLabel((resolvedSearchParams?.status || "Open").toLowerCase());
+  }, [ticket?.status, resolvedSearchParams?.status]);
+
+  const sla = useMemo(() => {
+    if (ticket?.created_at) {
+      const date = new Date(ticket.created_at);
+      if (!Number.isNaN(date.getTime())) {
+        return `Opened ${date.toLocaleDateString("en-GB", { day: "2-digit", month: "short" })}`;
+      }
+    }
+    return resolvedSearchParams?.sla || "ACK Overdue";
+  }, [ticket?.created_at, resolvedSearchParams?.sla]);
+
+  const events = ticket?.conversation_events || [];
+  const chatMessages = useMemo(() => buildChatMessages(events), [events]);
+  const hasAttachment = Boolean((ticket as any)?.attachment_url);
+  const lostFoundSummary = useMemo(() => extractLostFoundSummary(ticket), [ticket]);
+  const toolEvents = useMemo(() => extractToolEvents(events), [events]);
+
+  const handleSend = () => {
+    const text = inputValue.trim();
+    if (!text) return;
+
+    const newMessage: Message =
+      mode === "Internal Notes"
+        ? { id: Date.now(), role: "agent", text, time: "Now" }
+        : { id: Date.now(), role: "user", name: "You", text, time: "Now", duration: "" };
+
+    if (mode === "Internal Notes") {
+      setInternalMessages((prev) => [...prev, newMessage]);
+    } else {
+      setOutboundMessages((prev) => [...prev, newMessage]);
+    }
+    setInputValue("");
+  };
+
+  const renderInternalMessage = (msg: Message) => {
+    const isAgent = msg.role === "agent";
+    const bubbleClasses = isAgent
+      ? "bg-[#4b6bff] border border-white/20 text-white rounded-2xl rounded-br-sm"
+      : "bg-[#3f3f3f] border border-white/15 text-[#e9e8e8] rounded-2xl rounded-bl-sm";
+
+    return (
+      <div key={msg.id} className={`flex flex-col gap-1 ${isAgent ? "items-end" : "items-start"}`}>
+        <div className={`${bubbleClasses} p-4 shadow-sm max-w-full`}>
+          <div className="flex items-start gap-2">
+            <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
+              <svg width="18" height="18" viewBox="0 0 26 26" fill="none">
+                <circle cx="13" cy="13" r="13" fill={isAgent ? "#6BA4FF" : "#E1E2F8"} />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <span className="text-white font-medium mr-1">[{isAgent ? "Agent" : "System"}]</span>
+              <span className="text-white/90">{msg.text}</span>
+            </div>
+          </div>
+        </div>
+        <span className="text-[#797979] text-xs">{msg.time}</span>
+      </div>
+    );
+  };
+
+  const renderOutboundMessage = (msg: Message) => {
+    const isUser = msg.role === "user";
+    return (
+      <div key={msg.id} className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
+        <div
+          className={`${
+            isUser ? "border border-[#d9d9d9] bg-transparent" : "bg-[#555] border border-[#818181]"
+          } rounded-xl p-4 max-w-[492px] w-auto`}
+        >
+          <div className="flex items-start gap-2 justify-between mb-2">
+            <span className="text-[#969696] text-sm whitespace-nowrap">{msg.duration || ""}</span>
+          </div>
+          <p className="text-white text-sm italic">{msg.text}</p>
+        </div>
+        <span className="text-[#797979] text-xs">{msg.time}</span>
+      </div>
+    );
+  };
+
+  return (
+    <DesktopLayout showTopActions={false}>
+      <div className="h-screen bg-[#262626] flex flex-col gap-2 px-3 md:px-4 pb-4 pt-0 overflow-hidden min-h-0">
+        <TicketHeader title="Tickets" />
+
+        <div className="flex-1 bg-[rgba(255,255,255,0.08)] rounded-2xl overflow-hidden flex flex-col text-white border border-white/12 shadow-[0_20px_60px_rgba(0,0,0,0.35)] min-h-0">
+          {error && (
+            <div className="m-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-300">
+              {error}
+            </div>
+          )}
+          {isLoading && (
+            <div className="m-4 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/70">
+              Loading ticket...
+            </div>
+          )}
+          <div className="flex items-center justify-between px-6 py-4 border-b border-white/12">
+            <div className="flex items-center gap-5">
+              <span className="text-xl font-medium text-white">#{ticketId}</span>
+              {ticket?.title && (
+                <span className="text-sm text-white/60">{ticket.title}</span>
+              )}
+              {ticket?.category && (
+                <span className="text-xs uppercase tracking-[0.2em] text-white/40">
+                  {ticket.category}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1 bg-[#d2e8f7] text-[#101012] px-3 py-1 rounded-lg border border-white/30 shadow-sm">
+                <div className="w-2 h-2 rounded-full bg-[#0072E4]" />
+                <span className="text-sm">{status}</span>
+              </div>
+              <div className="flex items-center gap-1 bg-[#f7d2d2] text-[#101012] px-3 py-1 rounded-lg text-sm border border-white/30 shadow-sm">
+                <span>Severity:</span>
+                <span className="font-semibold">{severity}</span>
+              </div>
+              <div className="flex items-center gap-1 bg-[#e1e2f8] text-[#3840eb] px-3 py-1 rounded-lg text-sm border border-white/30 shadow-sm">
+                <span>SLA:</span>
+                <span className="font-semibold">{sla}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex-1 flex overflow-hidden min-h-0">
+            {/* Left Sidebar */}
+            <div className="w-80 flex flex-col gap-4 p-4 overflow-y-auto border-r border-white/10 min-h-0">
+              <div className="bg-[#3a3a3a] rounded-2xl p-4 flex flex-col gap-3 border border-white/10 shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
+                <div className="flex items-start justify-between">
+                  <h3 className="text-xl font-medium text-white">Case Summary</h3>
+                </div>
+                <div className="flex flex-col gap-3 text-sm">
+                  <div className="flex gap-3">
+                    <span className="text-[#74a9ff] w-20 shrink-0">Reporter:</span>
+                    <span className="text-[#f7f7f7] flex-1">{lostFoundSummary.reporter}</span>
+                  </div>
+                  <div className="flex gap-3">
+                    <span className="text-[#74a9ff] w-20 shrink-0">Person:</span>
+                    <span className="text-[#f7f7f7] flex-1">{lostFoundSummary.person}</span>
+                  </div>
+                  <div className="flex gap-3">
+                    <span className="text-[#74a9ff] w-20 shrink-0">Last seen:</span>
+                    <span className="text-[#f7f7f7] flex-1">{lostFoundSummary.lastSeen}</span>
+                  </div>
+                  <div className="flex gap-3">
+                    <span className="text-[#74a9ff] w-20 shrink-0">Beacon:</span>
+                    <span className="text-[#f7f7f7] flex-1">{lostFoundSummary.beacon}</span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {lostFoundSummary.tags.map((tag) => (
+                    <div key={tag} className="bg-[#e1e2f8] text-[#3840eb] px-2 py-0.5 rounded-lg text-xs">
+                      {tag}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-[#3a3a3a] rounded-2xl p-4 flex flex-col gap-3 max-h-60 border border-white/10 shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
+                <h3 className="text-xl font-medium text-white">Activity Timeline</h3>
+                <div className="flex flex-col gap-3 overflow-y-auto text-sm">
+                  {events.length === 0 ? (
+                    <div className="flex gap-3">
+                      <span className="text-[#74a9ff] whitespace-nowrap">—</span>
+                      <span className="text-[#f7f7f7]">No timeline entries yet.</span>
+                    </div>
+                  ) : (
+                    events.map((event, index) => (
+                      <div key={`${event.type}-${event.timestamp}-${index}`} className="flex gap-3">
+                        <span className="text-[#74a9ff] whitespace-nowrap">
+                          {formatEventTime(event.timestamp)}
+                        </span>
+                        <div className="text-[#f7f7f7]">
+                          <div className="text-white/80">{formatEventTitle(event)}</div>
+                          {event.text && (
+                            <div className="text-white/60 text-xs">{event.text}</div>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 border-l border-r border-white/10 flex flex-col min-h-0">
+              <div className="p-6 flex flex-col h-full min-h-0">
+                <div className="mb-6" />
+
+                <div className="flex-1 flex flex-col overflow-y-auto gap-4 mb-6 min-h-0">
+                  <div className="text-center text-[#939393] text-sm mb-2">Today</div>
+                  {mode === "Internal Notes" ? (
+                    <>
+                      {chatMessages.map((msg) => renderOutboundMessage(msg))}
+                      {internalMessages.map((msg) => renderInternalMessage(msg))}
+                    </>
+                  ) : (
+                    [...chatMessages, ...outboundMessages].map((msg) => renderOutboundMessage(msg))
+                  )}
+                </div>
+
+                <div className="bg-[#4b4b4b] rounded-xl p-3 flex items-center gap-3 border border-white/10">
+                  <input
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    placeholder={mode === "Internal Notes" ? "Send internal note" : "Send outbound message"}
+                    className="flex-1 bg-transparent border-none outline-none text-[#e9e8e8] placeholder:text-[#bfbfbf]"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSend}
+                    className="flex items-center justify-center bg-[#3d5afe] hover:bg-[#3450f0] text-white rounded-lg h-10 w-10 border border-white/20"
+                    aria-label="Send message"
+                  >
+                    <Send size={18} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="w-[320px] flex flex-col gap-4 p-6">
+              {hasAttachment && (
+                <div className="bg-[#3a3a3a] rounded-2xl p-4 flex flex-col gap-3 border border-white/10 shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
+                  <h3 className="text-xl font-medium text-white">Attachment</h3>
+                  <div className="w-12 h-12 bg-blue-200 rounded overflow-hidden">
+                    <div className="w-full h-full bg-gradient-to-br from-yellow-400 to-orange-400" />
+                  </div>
+                </div>
+              )}
+              {ticket?.location_lat != null && ticket?.location_lng != null && (
+                <MapView
+                  latitude={ticket.location_lat}
+                  longitude={ticket.location_lng}
+                />
+              )}
+              {toolEvents.length > 0 && (
+                <div className="bg-[#3a3a3a] rounded-2xl p-4 flex flex-col gap-3 border border-white/10 shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
+                  <h3 className="text-xl font-medium text-white">Tool Activity</h3>
+                  <div className="flex flex-col gap-3 max-h-[320px] overflow-y-auto text-sm text-white/80">
+                    {toolEvents.map((event) => (
+                      <div key={event.id} className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between text-xs text-white/50">
+                          <span>{event.title}</span>
+                          <span>{event.time}</span>
+                        </div>
+                        {event.details && (
+                          <pre className="whitespace-pre-wrap rounded-lg bg-black/20 p-2 text-[11px] text-white/70">
+                            {JSON.stringify(event.details, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </DesktopLayout>
+  );
+}
